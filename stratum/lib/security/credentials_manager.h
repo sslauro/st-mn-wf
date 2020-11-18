@@ -16,14 +16,13 @@
 
 namespace stratum {
 using TlsCredentialReloadInterface =
-    ::grpc_impl::experimental::TlsCredentialReloadInterface;
-using TlsCredentialReloadArg =
-    ::grpc_impl::experimental::TlsCredentialReloadArg;
+    ::grpc::experimental::TlsCredentialReloadInterface;
+using TlsCredentialReloadArg = ::grpc::experimental::TlsCredentialReloadArg;
 using TlsCredentialReloadConfig =
-    grpc_impl::experimental::TlsCredentialReloadConfig;
-using TlsKeyMaterialsConfig = ::grpc_impl::experimental::TlsKeyMaterialsConfig;
-using TlsCredentialsOptions = ::grpc_impl::experimental::TlsCredentialsOptions;
-using ::grpc_impl::experimental::TlsServerCredentials;
+    ::grpc::experimental::TlsCredentialReloadConfig;
+using TlsKeyMaterialsConfig = ::grpc::experimental::TlsKeyMaterialsConfig;
+using TlsCredentialsOptions = ::grpc::experimental::TlsCredentialsOptions;
+using ::grpc::experimental::TlsServerCredentials;
 
 // CredentialsReloadInterface is an implementation of
 // the TlsCredentialReloadInterface which helps reloading gRPC server
@@ -38,9 +37,9 @@ class CredentialsReloadInterface : public TlsCredentialReloadInterface {
                              std::string server_cert);
 
   // Public methods from TlsCredentialReloadInterface
-  int Schedule(TlsCredentialReloadArg *arg) override
+  int Schedule(TlsCredentialReloadArg* arg) override
       LOCKS_EXCLUDED(credential_lock_);
-  void Cancel(TlsCredentialReloadArg *arg) override;
+  void Cancel(TlsCredentialReloadArg* arg) override;
 
   // Loads new credentials
   ::util::Status LoadNewCredential(const std::string ca_cert,
@@ -50,7 +49,7 @@ class CredentialsReloadInterface : public TlsCredentialReloadInterface {
 
   // CredentialsReloadInterface is neither copyable nor movable.
   CredentialsReloadInterface(const CredentialsReloadInterface&) = delete;
-  CredentialsReloadInterface &operator=(const CredentialsReloadInterface&) =
+  CredentialsReloadInterface& operator=(const CredentialsReloadInterface&) =
       delete;
 
  private:
@@ -79,7 +78,7 @@ class CredentialsManager {
 
   // CredentialsManager is neither copyable nor movable.
   CredentialsManager(const CredentialsManager&) = delete;
-  CredentialsManager &operator=(const CredentialsManager&) = delete;
+  CredentialsManager& operator=(const CredentialsManager&) = delete;
 
   // Loads new credentials
   ::util::Status LoadNewCredential(const std::string ca_cert,

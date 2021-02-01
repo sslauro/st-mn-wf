@@ -225,6 +225,10 @@ class BfSdeInterface {
   // Return the chip type as a string.
   virtual std::string GetBfChipType(int device) const = 0;
 
+  // Sets the (port, queue) deflect destination for dropped packets.
+  virtual ::util::Status SetDeflectOnDropDestination(int device, int pipe,
+                                                     int port, int queue) = 0;
+
   // Send a packet to the PCIe CPU port.
   virtual ::util::Status TxPacket(int device, const std::string& packet) = 0;
 

@@ -369,6 +369,7 @@ BFChassisManager::~BFChassisManager() = default;
 
   if (config.has_vendor_config() &&
       config.vendor_config().has_tofino_config()) {
+    // Handle port shaping.
     const auto& node_id_to_port_shaping_config =
         config.vendor_config().tofino_config().node_id_to_port_shaping_config();
     for (const auto& key : node_id_to_port_shaping_config) {
@@ -392,6 +393,13 @@ BFChassisManager::~BFChassisManager() = default;
         node_id_to_port_id_to_port_config[node_id][port_id].shaping_config =
             shaping_config;
       }
+    }
+
+    // Handle deflect-on-drop config.
+    const auto& deflect_on_drop_configs =
+        config.vendor_config().tofino_config().deflect_on_drop_configs();
+    for (const auto& deflect_config : deflect_on_drop_configs) {
+      //
     }
   }
 

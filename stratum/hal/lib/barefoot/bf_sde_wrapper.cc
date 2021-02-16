@@ -512,6 +512,7 @@ template <typename T>
   RETURN_IF_BFRT_ERROR(table_key_->getValue(
       id, value->size(),
       reinterpret_cast<uint8*>(gtl::string_as_array(value))));
+  *value = ByteStringToP4RuntimeByteString(*value);
 
   return ::util::OkStatus();
 }
@@ -529,6 +530,8 @@ template <typename T>
   RETURN_IF_BFRT_ERROR(table_key_->getValueandMask(
       id, value->size(), reinterpret_cast<uint8*>(gtl::string_as_array(value)),
       reinterpret_cast<uint8*>(gtl::string_as_array(mask))));
+  *value = ByteStringToP4RuntimeByteString(*value);
+  *mask = ByteStringToP4RuntimeByteString(*mask);
 
   return ::util::OkStatus();
 }
@@ -544,6 +547,7 @@ template <typename T>
   RETURN_IF_BFRT_ERROR(table_key_->getValueLpm(
       id, prefix->size(),
       reinterpret_cast<uint8*>(gtl::string_as_array(prefix)), prefix_length));
+  *prefix = ByteStringToP4RuntimeByteString(*prefix);
 
   return ::util::OkStatus();
 }
@@ -561,6 +565,8 @@ template <typename T>
   RETURN_IF_BFRT_ERROR(table_key_->getValueRange(
       id, low->size(), reinterpret_cast<uint8*>(gtl::string_as_array(low)),
       reinterpret_cast<uint8*>(gtl::string_as_array(high))));
+  *low = ByteStringToP4RuntimeByteString(*low);
+  *high = ByteStringToP4RuntimeByteString(*high);
 
   return ::util::OkStatus();
 }
@@ -627,6 +633,7 @@ TableKey::CreateTableKey(const bfrt::BfRtInfo* bfrt_info_, int table_id) {
   RETURN_IF_BFRT_ERROR(table_data_->getValue(
       id, value->size(),
       reinterpret_cast<uint8*>(gtl::string_as_array(value))));
+  *value = ByteStringToP4RuntimeByteString(*value);
 
   return ::util::OkStatus();
 }

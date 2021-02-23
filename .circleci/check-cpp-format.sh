@@ -5,8 +5,8 @@
 #
 set -ex
 
-# Files in this branch that are different from master.
-CHANGED_FILES=$(git diff --name-only --diff-filter=d origin/master -- '*.h' '*.cc')
+# Files in this branch that are different from main.
+CHANGED_FILES=$(git diff --name-only --diff-filter=d origin/main -- '*.h' '*.cc')
 
 # List of files that are already formatted.
 read -r -d '\0' KNOWN_FILES << EOF
@@ -72,6 +72,10 @@ stratum/hal/lib/bcm/bcm_node_mock.h
 stratum/hal/lib/bcm/bcm_node_test.cc
 stratum/hal/lib/bcm/bcm_node.cc
 stratum/hal/lib/bcm/bcm_node.h
+stratum/hal/lib/bcm/bcm_packetio_manager_mock.h
+stratum/hal/lib/bcm/bcm_packetio_manager_test.cc
+stratum/hal/lib/bcm/bcm_packetio_manager.cc
+stratum/hal/lib/bcm/bcm_packetio_manager.h
 stratum/hal/lib/bcm/bcm_serdes_db_manager_mock.h
 stratum/hal/lib/bcm/bcm_serdes_db_manager_test.cc
 stratum/hal/lib/bcm/bcm_serdes_db_manager.cc

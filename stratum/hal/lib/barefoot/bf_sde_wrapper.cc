@@ -353,6 +353,7 @@ template <typename T>
 
   std::vector<bf_rt_id_t> data_field_ids;
   RETURN_IF_BFRT_ERROR(table->dataFieldIdListGet(&data_field_ids));
+  LOG(INFO) << "Table data {";
   for (const auto& field_id : data_field_ids) {
     std::string field_name;
     RETURN_IF_BFRT_ERROR(table->dataFieldNameGet(field_id, &field_name));
@@ -360,6 +361,8 @@ template <typename T>
     RETURN_IF_BFRT_ERROR(table->dataFieldDataTypeGet(field_id, &data_type));
     size_t field_size;
     RETURN_IF_BFRT_ERROR(table->dataFieldSizeGet(field_id, &field_size));
+    bool is_active;
+    RETURN_IF_BFRT_ERROR(table_data->isActive(field_id, &is_active));
 
     std::string value;
     switch (data_type) {
@@ -388,10 +391,12 @@ template <typename T>
             << "Unknown data_type: " << static_cast<int>(data_type) << ".";
     }
 
-    LOG(INFO) << "Table data {" << field_name << ": field_id: " << field_id
+    LOG(INFO) << "\t" << field_name << ": field_id: " << field_id
               << " data_type: " << static_cast<int>(data_type)
-              << " field_size: " << field_size << " value: " << value << "}";
+              << " field_size: " << field_size << " value: " << value
+              << " is_active: " << is_active;
   }
+  LOG(INFO) << "}";
 
   return ::util::OkStatus();
 }
@@ -562,7 +567,31 @@ TableKey::CreateTableKey(const bfrt::BfRtInfo* bfrt_info_, int table_id) {
 }
 
 ::util::Status TableData::GetActionMemberId(uint64* action_member_id) const {
-  return GetField(*table_data_, "$ACTION_MEMBER_ID", action_member_id);
+  const bfrt::BfRtTable* table;
+  RETURN_IF_BFRT_ERROR(table_data_->getParent(&table));
+  // Here we assume that table entries with action IDs (direct match-action) can
+  // never hold action member or group IDs (indirect match-action). Since this
+  // function is regularly called on both, we do not log this error here.
+  if (table->actionIdApplicable()) {
+    return MAKE_ERROR(ERR_ENTRY_NOT_FOUND).without_logging()
+           << "This direct table does not contain action member IDs.";
+  }
+  bf_rt_id_t field_id;
+  bfrt::DataType data_type;
+  RETURN_IF_BFRT_ERROR(table->dataFieldIdGet("$ACTION_MEMBER_ID", &field_id));
+  RETURN_IF_BFRT_ERROR(table->dataFieldDataTypeGet(field_id, &data_type));
+  CHECK_RETURN_IF_FALSE(data_type == bfrt::DataType::UINT64)
+      << "Requested uint64 but field $ACTION_MEMBER_ID has type "
+      << static_cast<int>(data_type);
+  bool is_active;
+  RETURN_IF_BFRT_ERROR(table_data_->isActive(field_id, &is_active));
+  if (!is_active) {
+    RETURN_ERROR(ERR_ENTRY_NOT_FOUND).without_logging()
+        << "Field $ACTION_MEMBER_ID is not active.";
+  }
+  RETURN_IF_BFRT_ERROR(table_data_->getValue(field_id, action_member_id));
+
+  return ::util::OkStatus();
 }
 
 ::util::Status TableData::SetSelectorGroupId(uint64 selector_group_id) {
@@ -570,7 +599,31 @@ TableKey::CreateTableKey(const bfrt::BfRtInfo* bfrt_info_, int table_id) {
 }
 
 ::util::Status TableData::GetSelectorGroupId(uint64* selector_group_id) const {
-  return GetField(*table_data_, "$SELECTOR_GROUP_ID", selector_group_id);
+  const bfrt::BfRtTable* table;
+  RETURN_IF_BFRT_ERROR(table_data_->getParent(&table));
+  // Here we assume that table entries with action IDs (direct match-action) can
+  // never hold action member or group IDs (indirect match-action). Since this
+  // function is regularly called on both, we do not log this error here.
+  if (table->actionIdApplicable()) {
+    return MAKE_ERROR(ERR_ENTRY_NOT_FOUND).without_logging()
+           << "This direct table does not contain action group IDs.";
+  }
+  bf_rt_id_t field_id;
+  bfrt::DataType data_type;
+  RETURN_IF_BFRT_ERROR(table->dataFieldIdGet("$SELECTOR_GROUP_ID", &field_id));
+  RETURN_IF_BFRT_ERROR(table->dataFieldDataTypeGet(field_id, &data_type));
+  CHECK_RETURN_IF_FALSE(data_type == bfrt::DataType::UINT64)
+      << "Requested uint64 but field $SELECTOR_GROUP_ID has type "
+      << static_cast<int>(data_type);
+  bool is_active;
+  RETURN_IF_BFRT_ERROR(table_data_->isActive(field_id, &is_active));
+  if (!is_active) {
+    RETURN_ERROR(ERR_ENTRY_NOT_FOUND).without_logging()
+        << "Field $SELECTOR_GROUP_ID is not active.";
+  }
+  RETURN_IF_BFRT_ERROR(table_data_->getValue(field_id, selector_group_id));
+
+  return ::util::OkStatus();
 }
 
 ::util::Status TableData::SetOnlyCounterData(uint64 bytes, uint64 packets) {

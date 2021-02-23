@@ -14,8 +14,8 @@ Copyright 2018-present Open Networking Foundation
 
 Stratum is an open source silicon-independent switch operating system for software defined networks. It is building an open, minimal production-ready distribution for white box switches. Stratum exposes a set of next-generation SDN interfaces including P4Runtime and OpenConfig, enabling interchangeability of forwarding devices and programmability of forwarding behaviors. Current support includes Barefoot Tofino and Broadcom Tomahawk devices, as well as the bmv2 software switch.
 
-Build status (master): [![CircleCI](https://circleci.com/gh/stratum/stratum/tree/master.svg?style=svg)](https://circleci.com/gh/stratum/stratum/tree/master)
-[![codecov](https://codecov.io/gh/stratum/stratum/branch/master/graph/badge.svg)](https://codecov.io/gh/stratum/stratum)
+Build status (main): [![CircleCI](https://circleci.com/gh/stratum/stratum/tree/main.svg?style=svg)](https://circleci.com/gh/stratum/stratum/tree/main)
+[![codecov](https://codecov.io/gh/stratum/stratum/branch/main/graph/badge.svg)](https://codecov.io/gh/stratum/stratum)
 
 # Documentation
 
@@ -29,6 +29,7 @@ If you're completly new to the world of P4 and are looking for step-by-step inst
 - [Code of Conduct](/CODE_OF_CONDUCT.md)
 - [Contribution Guidelines](/CONTRIBUTING.md)
 - [IDE Setup](https://github.com/stratum/stratum/wiki/IDE-setup-for-development)
+- [Release Plan](stratum/stratum/docs/release_plan.md)
 - [PHAL Development Tutorial](/stratum/docs/phal_development_tutorial.md)
 - [Stratum Configurators Design Document](/stratum/docs/configurators.md)
 - [Stratum PHAL Overview (Physical Hardware Access Layer)](/stratum/docs/phal.md)
@@ -94,6 +95,8 @@ to program fixed-pipeline switches using the Tomahawk chip from Broadcom.
 
 ## Tofino
 
+- APS Networks BF2556X-1T
+- APS Networks BF6064X-T
 - Delta AG9064v1
 - Edgecore Wedge100BF-32QS
 - Edgecore Wedge100BF-32X
@@ -105,8 +108,6 @@ to program fixed-pipeline switches using the Tomahawk chip from Broadcom.
 - Netberg Aurora 610
 - Netberg Aurora 710
 - Netberg Aurora 750
-- Stordis BF6064X
-- Stordis BF2556X
 
 ## Broadcom
 

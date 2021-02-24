@@ -682,16 +682,17 @@ message TofinoConfig {
   // DeflectOnPacketDropConfig specifies the port and queue where dropped
   // packets will be deflected to.
   message DeflectOnPacketDropConfig {
-    uint64 node = 1;
-    uint32 pipe = 2;
-    uint32 port = 3;
-    uint32 queue = 4;
+    message DropTarget {
+      uint32 port = 1;
+      uint32 queue = 2;
+    }
+    repeated DropTarget drop_targets = 1;
   }
 
   // Maps from the index of the nodes (1-based) to all the configs related to
   // that specific node.
   map<uint64, BfPortShapingConfig> node_id_to_port_shaping_config = 1;
-  repeated DeflectOnPacketDropConfig deflect_on_drop_configs = 2;
+  map<uint64, DeflectOnPacketDropConfig> node_id_to_deflect_on_drop_configs = 2;
 }
 
 message VendorConfig {

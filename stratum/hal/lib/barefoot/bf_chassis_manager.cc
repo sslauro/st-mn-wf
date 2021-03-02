@@ -58,7 +58,7 @@ BFChassisManager::BFChassisManager(OperationMode mode,
       node_id_to_port_id_to_singleton_port_key_(),
       node_id_to_port_id_to_sdk_port_id_(),
       node_id_to_sdk_port_id_to_port_id_(),
-      node_id_to_dod_config_(),
+      node_id_to_deflect_on_drop_config_(),
       xcvr_port_key_to_xcvr_state_(),
       phal_interface_(ABSL_DIE_IF_NULL(phal_interface)),
       bf_sde_interface_(ABSL_DIE_IF_NULL(bf_sde_interface)) {}
@@ -277,7 +277,7 @@ BFChassisManager::~BFChassisManager() = default;
   std::map<uint64, std::map<uint32, uint32>> node_id_to_port_id_to_sdk_port_id;
   std::map<uint64, std::map<uint32, uint32>> node_id_to_sdk_port_id_to_port_id;
   std::map<uint64, TofinoConfig::DeflectOnPacketDropConfig>
-      node_id_to_dod_config;
+      node_id_to_deflect_on_drop_config;
   std::map<PortKey, HwState> xcvr_port_key_to_xcvr_state;
 
   {
@@ -417,9 +417,11 @@ BFChassisManager::~BFChassisManager() = default;
             node_id_to_port_id_to_sdk_port_id[node_id][port_id];
         RETURN_IF_ERROR(bf_sde_interface_->SetDeflectOnDropDestination(
             unit, sdk_port_id, drop_target.queue()));
+        LOG(INFO) << "Configured deflect on drop target port " << sdk_port_id
+                  << " in node " << node_id << ".";
       }
-      CHECK_RETURN_IF_FALSE(gtl::InsertIfNotPresent(&node_id_to_dod_config,
-                                                    node_id, deflect_config));
+      CHECK_RETURN_IF_FALSE(gtl::InsertIfNotPresent(
+          &node_id_to_deflect_on_drop_config, node_id, deflect_config));
     }
   }
 
@@ -450,7 +452,7 @@ BFChassisManager::~BFChassisManager() = default;
       node_id_to_port_id_to_singleton_port_key;
   node_id_to_port_id_to_sdk_port_id_ = node_id_to_port_id_to_sdk_port_id;
   node_id_to_sdk_port_id_to_port_id_ = node_id_to_sdk_port_id_to_port_id;
-  node_id_to_dod_config_ = node_id_to_dod_config;
+  node_id_to_deflect_on_drop_config_ = node_id_to_deflect_on_drop_config;
   xcvr_port_key_to_xcvr_state_ = xcvr_port_key_to_xcvr_state;
   initialized_ = true;
 
@@ -873,11 +875,13 @@ BFChassisManager::GetPortConfig(uint64 node_id, uint32 port_id) const {
   }
 
   for (const auto& drop_target :
-       node_id_to_dod_config_[node_id].drop_targets()) {
+       node_id_to_deflect_on_drop_config_[node_id].drop_targets()) {
     ASSIGN_OR_RETURN(auto sdk_port_id,
                      GetSdkPortId(node_id, drop_target.port()));
     RETURN_IF_ERROR(bf_sde_interface_->SetDeflectOnDropDestination(
         unit, sdk_port_id, drop_target.queue()));
+    LOG(INFO) << "Configured deflect on drop target port " << sdk_port_id
+              << " in node " << node_id << ".";
   }
 
   return status;
@@ -1188,7 +1192,7 @@ void BFChassisManager::CleanupInternalState() {
   node_id_to_port_id_to_singleton_port_key_.clear();
   node_id_to_port_id_to_sdk_port_id_.clear();
   node_id_to_sdk_port_id_to_port_id_.clear();
-  node_id_to_dod_config_.clear();
+  node_id_to_deflect_on_drop_config_.clear();
   xcvr_port_key_to_xcvr_state_.clear();
 }
 

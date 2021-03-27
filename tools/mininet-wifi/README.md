@@ -4,7 +4,7 @@ Copyright 2018-present Open Networking Foundation
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Stratum-enabled Mininet
+# Stratum-enabled Mininet-Wifi
 
 We provide a Docker image that can execute a Mininet emulated network using
 `stratum_bmv2` as the default switch.
@@ -13,7 +13,7 @@ We provide a Docker image that can execute a Mininet emulated network using
 
 To build this image, from the Stratum project root:
 
-    docker build -t <some tag> -f tools/mininet/Dockerfile .
+    docker build -t <some tag> -f tools/mininet-wifi/Dockerfile.wf .
 
 ## Obtain image from Docker Hub
 

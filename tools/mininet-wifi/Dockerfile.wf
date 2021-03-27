@@ -3,7 +3,7 @@
 
 # This Dockerfile expects the stratum root as its scope, hence you should build
 # from root e.g.:
-# docker build -t <some tag> -f tools/mininet/Dockerfile .
+# docker build -t <some tag> -f tools/mininet-wifi/Dockerfile .
 
 # We use a 2-stage build. Build all tools first, then copy only the strict necessary
 # to a new image with runtime dependencies.
@@ -40,7 +40,9 @@ ENV PYTHONPATH /output/usr/local/lib/python2.7/dist-packages
 #Build Mininet-wifi
 RUN mkdir /tmp/mininet-wifi 
 WORKDIR /tmp/mininet-wifi
-RUN curl -L https://github.com/intrig-unicamp/mininet-wifi/tarball/master | \
+#RUN curl -L https://github.com/intrig-unicamp/mininet-wifi/tarball/master | \
+#    tar xz --strip-components=1
+RUN curl -L https://github.com/sslauro/mininet-wifi/tarball/master | \
     tar xz --strip-components=1
 RUN PREFIX=/output make install
 RUN python setup.py install --root /output

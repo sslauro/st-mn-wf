@@ -176,4 +176,4 @@ non-root user, otherwise you will not be able to run setup_dev_env.sh:
     sudo usermod -aG docker $USER
 
 ## Build a st-mn-wf 
-docker build -t st-mn-wf -f tools/mininet/Dockerfile.wf .
+docker build -t st-mn-wf -f tools/mininet-wifi/Dockerfile.wf .

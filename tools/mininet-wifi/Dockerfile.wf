@@ -17,7 +17,13 @@ ENV BUILD_DEPS \
     python-tk \
     python-psutil \
     python-matplotlib \
-    help2man
+    help2man \
+    make \
+    libevent-dev \
+    libconfig-dev \
+    libnl-3-dev \
+    libnl-genl-3-dev \
+    git 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ${BUILD_DEPS}
 
@@ -48,6 +54,14 @@ RUN PREFIX=/output make install
 RUN python setup.py install --root /output
 # Install `m` utility so user can attach to a mininet host directly
 RUN cp util/m /output/bin/m && sed -i 's#sudo##g' /output/bin/m
+
+# Build Wmediumd
+WORKDIR /tmp
+RUN git clone --depth=1 -b mininet-wifi https://github.com/ramonfontes/wmediumd.git
+WORKDIR /tmp/wmediumd
+RUN mkdir -p /output/usr/bin
+RUN make install BINDIR=/output/usr/bin/
+WORKDIR /tmp/mininet-wifi
 
 # Build stratum_bmv2
 COPY . /tmp/stratum
@@ -94,6 +108,14 @@ ARG GRPC_VER=1.30.0
 RUN pip install --root /output "protobuf<=${PROTOBUF_VER}"
 RUN pip install --root /output "grpcio<=${GRPC_VER}"
 
+
+
+RUN pip install --root /output --upgrade pip
+RUN pip install --root /output --upgrade pyflakes
+RUN pip install --root /output --upgrade pylint
+RUN pip install --root /output --ignore-installed six  matplotlib==2.1.1
+
+
 # Final stage, runtime.
 FROM bitnami/minideb:stretch as runtime
 
@@ -122,20 +144,22 @@ ENV RUNTIME_DEPS \
     libgmp10 \
     python-setuptools \
     python-psutil \
-    python-pip\
     python-tk \
     openvswitch-switch \
+    libevent-2.0 \
+    libconfig-dev \
     hostapd \
     ssh \
     libpcap0.8 
 RUN install_packages $RUNTIME_DEPS
 
-COPY --from=builder /output /
-RUN pip install --upgrade pip
-RUN pip install --upgrade pyflakes
-RUN pip install --upgrade pylint
-RUN pip install  matplotlib==2.1.1 --ignore-installed six
 #COPY --from=builder /output /
+#RUN pip install --root /output --upgrade pip
+#RUN pip install --root /output --upgrade pyflakes
+#RUN pip install --root /output --upgrade pylint
+#RUN pip install --root /output --ignore-installed six  matplotlib==2.1.1
+#RUN pip install --root /output --upgrade matplotlib
+COPY --from=builder /output /
 RUN ldconfig
 
 WORKDIR /root

@@ -11,6 +11,11 @@
 #include "gmock/gmock.h"
 #include "stratum/hal/lib/barefoot/bf_sde_interface.h"
 
+DEFINE_bool(incompatible_enable_bfrt_legacy_bytestring_responses, true,
+            "Enables the legacy padded byte string format in P4Runtime "
+            "responses for Stratum-bfrt. The strings are left unchanged from "
+            "the underlying SDE.");
+
 namespace stratum {
 namespace hal {
 namespace barefoot {
@@ -52,8 +57,6 @@ class TableDataMock : public BfSdeInterface::TableDataInterface {
   MOCK_CONST_METHOD1(GetSelectorGroupId,
                      ::util::Status(uint64* selector_group_id));
   MOCK_METHOD2(SetCounterData, ::util::Status(uint64 bytes, uint64 packets));
-  MOCK_METHOD2(SetOnlyCounterData,
-               ::util::Status(uint64 bytes, uint64 packets));
   MOCK_CONST_METHOD2(GetCounterData,
                      ::util::Status(uint64* bytes, uint64* packets));
   MOCK_CONST_METHOD1(GetActionId, ::util::Status(int* action_id));
@@ -62,6 +65,10 @@ class TableDataMock : public BfSdeInterface::TableDataInterface {
 
 class BfSdeMock : public BfSdeInterface {
  public:
+  MOCK_METHOD3(InitializeSde,
+               ::util::Status(const std::string& sde_install_path,
+                              const std::string& sde_config_file,
+                              bool run_in_background));
   MOCK_METHOD2(AddDevice,
                ::util::Status(int device,
                               const BfrtDeviceConfig& device_config));
@@ -84,6 +91,9 @@ class BfSdeMock : public BfSdeInterface {
                               uint32 burst_size, uint64 rate_per_second));
   MOCK_METHOD3(EnablePortShaping,
                ::util::Status(int device, int port, TriState enable));
+  MOCK_METHOD2(ConfigureQos,
+               ::util::Status(int device,
+                              const TofinoConfig::TofinoQosConfig& qos_config));
   MOCK_METHOD3(SetPortAutonegPolicy,
                ::util::Status(int device, int port, TriState autoneg));
   MOCK_METHOD3(SetPortMtu, ::util::Status(int device, int port, int32 mtu));
@@ -95,6 +105,8 @@ class BfSdeMock : public BfSdeInterface {
                ::util::StatusOr<uint32>(int device, const PortKey& port_key));
   MOCK_METHOD1(GetPcieCpuPort, ::util::StatusOr<int>(int device));
   MOCK_METHOD2(SetTmCpuPort, ::util::Status(int device, int port));
+  MOCK_METHOD3(SetDeflectOnDropDestination,
+               ::util::Status(int device, int port, int queue));
   MOCK_METHOD1(IsSoftwareModel, ::util::StatusOr<bool>(int device));
   MOCK_CONST_METHOD1(GetBfChipType, std::string(int device));
   MOCK_CONST_METHOD0(GetSdeVersion, std::string());

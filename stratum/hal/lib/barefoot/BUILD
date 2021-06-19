@@ -6,6 +6,7 @@ load("@rules_proto//proto:defs.bzl", "proto_library")
 load("@rules_cc//cc:defs.bzl", "cc_proto_library")
 load(
     "//bazel:rules.bzl",
+    "HOST_ARCHES",
     "STRATUM_INTERNAL",
     "stratum_cc_library",
     "stratum_cc_test",
@@ -25,7 +26,9 @@ SDE_DEFINES = select(
         "@local_barefoot_bin//:sde_version_9.2.0": ["SDE_9_2_0"],
         "@local_barefoot_bin//:sde_version_9.3.0": ["SDE_9_3_0"],
         "@local_barefoot_bin//:sde_version_9.3.1": ["SDE_9_3_1"],
+        "@local_barefoot_bin//:sde_version_9.3.2": ["SDE_9_3_2"],
         "@local_barefoot_bin//:sde_version_9.4.0": ["SDE_9_4_0"],
+        "@local_barefoot_bin//:sde_version_9.5.0": ["SDE_9_5_0"],
     },
     no_match_error = "Unsupported SDE version",
 )
@@ -74,6 +77,26 @@ stratum_cc_library(
     ],
 )
 
+stratum_cc_test(
+    name = "bfrt_switch_test",
+    srcs = ["bfrt_switch_test.cc"],
+    deps = [
+        ":bf_chassis_manager_mock",
+        ":bf_sde_mock",
+        ":bfrt_node_mock",
+        ":bfrt_switch",
+        ":test_main",
+        "//stratum/glue/status",
+        "//stratum/glue/status:status_test_util",
+        "//stratum/hal/lib/common:phal_mock",
+        "//stratum/hal/lib/common:switch_interface",
+        "//stratum/hal/lib/common:writer_mock",
+        "//stratum/lib:utils",
+        "@com_google_absl//absl/memory",
+        "@com_google_googletest//:gtest",
+    ],
+)
+
 stratum_cc_library(
     name = "bf_chassis_manager",
     srcs = ["bf_chassis_manager.cc"],
@@ -108,6 +131,7 @@ stratum_cc_library(
 stratum_cc_test(
     name = "bf_chassis_manager_test",
     srcs = ["bf_chassis_manager_test.cc"],
+    copts = ["-Wno-thread-safety-analysis"],  # TODO(antonin)
     deps = [
         ":bf_chassis_manager",
         ":bf_sde_mock",
@@ -122,9 +146,23 @@ stratum_cc_test(
         "//stratum/hal/lib/common:phal_mock",
         "//stratum/hal/lib/common:utils",
         "//stratum/hal/lib/common:writer_interface",
+        "//stratum/hal/lib/common:writer_mock",
         "//stratum/lib:utils",
         "//stratum/lib/test_utils:matchers",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/time",
+        "@com_google_googletest//:gtest",
+    ],
+)
+
+stratum_cc_library(
+    name = "bf_chassis_manager_mock",
+    testonly = 1,
+    hdrs = ["bf_chassis_manager_mock.h"],
+    arches = HOST_ARCHES,
+    deps = [
+        ":bf_chassis_manager",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -271,6 +309,17 @@ stratum_cc_library(
 )
 
 stratum_cc_library(
+    name = "bfrt_node_mock",
+    testonly = 1,
+    hdrs = ["bfrt_node_mock.h"],
+    arches = HOST_ARCHES,
+    deps = [
+        ":bfrt_node",
+        "@com_google_googletest//:gtest",
+    ],
+)
+
+stratum_cc_library(
     name = "bfrt_table_manager",
     srcs = ["bfrt_table_manager.cc"],
     hdrs = ["bfrt_table_manager.h"],
@@ -410,6 +459,7 @@ stratum_cc_library(
         "//stratum/hal/lib/common:common_cc_proto",
         "//stratum/hal/lib/common:constants",
         "//stratum/hal/lib/common:writer_interface",
+        "//stratum/hal/lib/p4:utils",
         "//stratum/lib:utils",
         "@com_github_p4lang_p4runtime//:p4runtime_cc_grpc",
         "@com_google_absl//absl/container:flat_hash_map",

@@ -25,8 +25,8 @@ You can pull a nightly version of this container image from
 $ docker pull stratumproject/stratum-bf:[SDE version]
 ```
 
-For example, the container with BF SDE 9.2.0: <br/>
-`stratumproject/stratum-bf:9.2.0`
+For example, the container with BF SDE 9.3.2: <br/>
+`stratumproject/stratum-bf:9.3.2`
 
 These containers include kernel modules for OpenNetworkLinux.
 
@@ -60,8 +60,8 @@ docker save [Image Name] -o [Tarball Name]
 
 For example,
 ```bash
-docker pull stratumproject/stratum-bf:9.2.0
-docker save stratumproject/stratum-bf:9.2.0 -o stratum-bf-9.2.0-docker.tar
+docker pull stratumproject/stratum-bf:9.3.2
+docker save stratumproject/stratum-bf:9.3.2 -o stratum-bf-9.3.2-docker.tar
 ```
 
 Then, deploy the tarball to the device via scp, rsync, http, USB stick, etc.
@@ -77,7 +77,7 @@ docker images
 For example,
 
 ```bash
-docker load -i stratum-bf-9.2.0-docker.tar
+docker load -i stratum-bf-9.3.2-docker.tar
 ```
 
 ### Set up huge pages
@@ -199,7 +199,7 @@ In one terminal window, run `tofino-model` in one container:
 ```bash
 docker run --rm -it --privileged \
   --network=host \
-  stratumproject/tofino-model:9.2.0  # <SDE_VERSION>
+  stratumproject/tofino-model:9.3.2  # <SDE_VERSION>
 ```
 
 In another terminal window, run Stratum in its own container:
@@ -207,7 +207,6 @@ In another terminal window, run Stratum in its own container:
 ```bash
 PLATFORM=barefoot-tofino-model \
 stratum/hal/bin/barefoot/docker/start-stratum-container.sh \
-  -bf_sim \
   -bf_switchd_background=false \
   -enable_onlp=false
 ```
@@ -382,16 +381,169 @@ vendor_config {
 }
 ```
 
+##### Quality of Service (QoS)
+
+Due to legal reasons we can't give a full description of the QoS model inside
+the Tofino traffic manager here. Refer to the Intel docs "10k-AS1-002EA" and
+"10k-UG8-002EA-FF-TM" available on the customer portal.
+
+Example configuration:
+
+```protobuf
+vendor_config {
+  tofino_config {
+    node_id_to_qos_config {
+      key: 1
+      value {
+        pool_configs {
+          pool: INGRESS_APP_POOL_0
+          pool_size: 30000
+          enable_color_drop: false
+        }
+        pool_configs {
+          pool: INGRESS_APP_POOL_1
+          pool_size: 30000
+          enable_color_drop: false
+        }
+        pool_configs {
+          pool: EGRESS_APP_POOL_0
+          pool_size: 30000
+          enable_color_drop: false
+        }
+        pool_configs {
+          pool: EGRESS_APP_POOL_1
+          pool_size: 30000
+          enable_color_drop: false
+        }
+        ppg_configs {
+          sdk_port: 260
+          is_default_ppg: true
+          minimum_guaranteed_cells: 200
+          pool: INGRESS_APP_POOL_0
+          base_use_limit: 400
+          baf: BAF_80_PERCENT
+          hysteresis: 50
+          ingress_drop_limit: 4000
+          icos_bitmap: 0xfd
+        }
+        ppg_configs {
+          sdk_port: 260
+          is_default_ppg: false
+          minimum_guaranteed_cells: 200
+          pool: INGRESS_APP_POOL_1
+          base_use_limit: 400
+          baf: BAF_80_PERCENT
+          hysteresis: 50
+          ingress_drop_limit: 4000
+          icos_bitmap: 0x02
+        }
+        ppg_configs {
+          sdk_port: 268
+          is_default_ppg: true
+          minimum_guaranteed_cells: 200
+          pool: INGRESS_APP_POOL_0
+          base_use_limit: 400
+          baf: BAF_80_PERCENT
+          hysteresis: 50
+          ingress_drop_limit: 4000
+          icos_bitmap: 0xfd
+        }
+        ppg_configs {
+          sdk_port: 268
+          is_default_ppg: false
+          minimum_guaranteed_cells: 200
+          pool: INGRESS_APP_POOL_1
+          base_use_limit: 400
+          baf: BAF_80_PERCENT
+          hysteresis: 50
+          ingress_drop_limit: 4000
+          icos_bitmap: 0x02
+        }
+        queue_configs {
+          sdk_port: 260
+          queue_mapping {
+            queue_id: 0
+            priority: PRIO_0
+            weight: 1
+            minimum_guaranteed_cells: 100
+            pool: EGRESS_APP_POOL_0
+            base_use_limit: 200
+            baf: BAF_80_PERCENT
+            hysteresis: 50
+            max_shaping_is_in_pps: false
+            max_rate: 100000000
+            max_burst: 9000
+            min_shaping_is_in_pps: false
+            min_rate: 1000000
+            min_burst: 4500
+          }
+          queue_mapping {
+            queue_id: 1
+            priority: PRIO_1
+            weight: 1
+            minimum_guaranteed_cells: 100
+            pool: EGRESS_APP_POOL_1
+            base_use_limit: 200
+            baf: BAF_80_PERCENT
+            hysteresis: 50
+            max_shaping_is_in_pps: false
+            max_rate: 100000000
+            max_burst: 9000
+            min_shaping_is_in_pps: false
+            min_rate: 1000000
+            min_burst: 4500
+          }
+        }
+        queue_configs {
+          sdk_port: 268
+          queue_mapping {
+            queue_id: 0
+            priority: PRIO_0
+            weight: 1
+            minimum_guaranteed_cells: 100
+            pool: EGRESS_APP_POOL_0
+            base_use_limit: 200
+            baf: BAF_80_PERCENT
+            hysteresis: 50
+            max_shaping_is_in_pps: false
+            max_rate: 100000000
+            max_burst: 9000
+            min_shaping_is_in_pps: false
+            min_rate: 1000000
+            min_burst: 4500
+          }
+          queue_mapping {
+            queue_id: 1
+            priority: PRIO_1
+            weight: 1
+            minimum_guaranteed_cells: 100
+            pool: EGRESS_APP_POOL_1
+            base_use_limit: 200
+            baf: BAF_80_PERCENT
+            hysteresis: 50
+            max_shaping_is_in_pps: false
+            max_rate: 100000000
+            max_burst: 9000
+            min_shaping_is_in_pps: false
+            min_rate: 1000000
+            min_burst: 4500
+          }
+        }
+      }
+    }
+  }
+}
+```
+
 ### Running with BSP or on Tofino model
 
 ```bash
-start-stratum.sh -bf_sim -enable_onlp=false
+start-stratum.sh -enable_onlp=false
 ```
 
-The `-bf_sim` flag tells Stratum not to use the Phal ONLP implementation, but
-`PhalSim`, a "fake" Phal implementation, instead. Use this flag when you are
-using a vendor-provided BSP or running Stratum with the Tofino software model.
-Additionally, the ONLP plugin has to be disabled with `-enable_onlp=false`.
+The `-enable_onlp=false` flag tells Stratum not to use the ONLP PHAL plugin. Use
+this flag when you are using a vendor-provided BSP or running Stratum with the
+Tofino software model.
 
 ### Running the binary in BSP-less mode
 
@@ -452,6 +604,35 @@ argument when starting Stratum. The CLI is disabled by default.
 The CLI will start after Stratum and the SDE finish initialization. You may
 need to press "Enter" a few times to see the prompt. Please refer to BF SDE
 documentation for details on how to use the CLI.
+
+### Access BF Shell via telnet (experimental)
+
+When Stratum started, the BF Shell will be enabled by default. To access the BF
+Shell, run `attach-bf-shell.sh` in the container:
+
+```bash
+docker exec -it [stratum container name or ID] attach-bf-shell.sh
+```
+
+This script will start a telnet session that connects to the BF Shell. Once you
+have entered the BF Shell, type `ucli` to access the BF CLI.
+
+> Since we do not support all features from the BF Shell, using commands other
+  than `ucli` may cause Stratum crash.
+
+To exit the BF CLI or the BF Shell, use `exit`. Note that using `Ctrl+C` will
+end the BF Shell without closing the telnet session. To exit the telnet session,
+press `Ctrl` and `]` to escape from the session and type `quit` to exit telnet.
+
+### P4Runtime canonical byte strings
+
+P4Runtime defines a [canonical byte string representation](https://s3-us-west-2.amazonaws.com/p4runtime/docs/master/P4Runtime-Spec.html#sec-bytestrings)
+for binary data in proto messages such as TableEntries and PacketIn/Outs. In
+short, it requires that the binary strings must not contain redundant bytes,
+ i.e., `\x00\xab` vs `\xab`. For Stratum-bfrt the
+`-incompatible_enable_bfrt_legacy_bytestring_responses` flag toggles this
+behavior. **This flag will be removed in a future release and canonical byte
+strings will be the default.**
 
 -----
 
@@ -531,7 +712,7 @@ will crash the switch:
     @           0x9f8403 pi::fe::proto::DeviceMgrImp::pipeline_config_set()
     @           0x9f7e31 pi::fe::proto::DeviceMgr::pipeline_config_set()
     @           0x7220d6 stratum::hal::pi::PINode::PushForwardingPipelineConfig()
-    @           0x41fb99 stratum::hal::barefoot::BFSwitch::PushForwardingPipelineConfig()
+    @           0x41fb99 stratum::hal::barefoot::BfSwitch::PushForwardingPipelineConfig()
     @           0x65db56 stratum::hal::P4Service::SetForwardingPipelineConfig()
 ```
 

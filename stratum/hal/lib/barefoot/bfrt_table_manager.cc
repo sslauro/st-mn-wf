@@ -34,23 +34,14 @@ BfrtTableManager::BfrtTableManager(OperationMode mode,
                                    BfSdeInterface* bf_sde_interface, int device)
     : mode_(mode),
       register_timer_descriptors_(),
-      p4_info_manager_(nullptr),
       bf_sde_interface_(ABSL_DIE_IF_NULL(bf_sde_interface)),
+      p4_info_manager_(nullptr),
       device_(device) {}
 
 std::unique_ptr<BfrtTableManager> BfrtTableManager::CreateInstance(
     OperationMode mode, BfSdeInterface* bf_sde_interface, int device) {
   return absl::WrapUnique(new BfrtTableManager(mode, bf_sde_interface, device));
 }
-namespace {
-struct RegisterClearThreadData {
-  std::vector<p4::config::v1::Register> registers;
-  BfrtTableManager* mgr;
-
-  explicit RegisterClearThreadData(BfrtTableManager* _mgr)
-      : registers(), mgr(_mgr) {}
-};
-}  // namespace
 
 ::util::Status BfrtTableManager::PushForwardingPipelineConfig(
     const BfrtDeviceConfig& config) {
@@ -495,13 +486,12 @@ struct RegisterClearThreadData {
     result.mutable_action()->set_action_profile_group_id(selector_group_id);
   }
 
-  // Counter data
+  // Counter data, if applicable.
   uint64 bytes, packets;
-  if (table_data->GetCounterData(&bytes, &packets).ok()) {
-    if (request.has_counter_data()) {
-      result.mutable_counter_data()->set_byte_count(bytes);
-      result.mutable_counter_data()->set_packet_count(packets);
-    }
+  if (request.has_counter_data() &&
+      table_data->GetCounterData(&bytes, &packets).ok()) {
+    result.mutable_counter_data()->set_byte_count(bytes);
+    result.mutable_counter_data()->set_packet_count(packets);
   }
 
   return result;
@@ -694,8 +684,9 @@ struct RegisterClearThreadData {
   RETURN_IF_ERROR(BuildTableKey(table_entry, table_key.get()));
 
   // Fetch existing entry with action data. This is needed since the P4RT
-  // request does not provide the action (id), but the SDE requires it in the
-  // later modify call.
+  // request does not provide the action ID and data, but we have to provide the
+  // current values in the later modify call to the SDE, else we would modify
+  // the table entry.
   RETURN_IF_ERROR(bf_sde_interface_->GetTableEntry(
       device_, session, table_id, table_key.get(), table_data.get()));
 
@@ -706,9 +697,9 @@ struct RegisterClearThreadData {
     return ::util::OkStatus();
   }
 
-  RETURN_IF_ERROR(table_data->SetOnlyCounterData(
-      direct_counter_entry.data().byte_count(),
-      direct_counter_entry.data().packet_count()));
+  RETURN_IF_ERROR(
+      table_data->SetCounterData(direct_counter_entry.data().byte_count(),
+                                 direct_counter_entry.data().packet_count()));
 
   RETURN_IF_ERROR(bf_sde_interface_->ModifyTableEntry(
       device_, session, table_id, table_key.get(), table_data.get()));

@@ -17,9 +17,9 @@ It also builds the kernel module if kernel header tarball is given.
 Usage: $0 [SDE_TAR [KERNEL_HEADERS_TAR]...]
 
 Example:
-    $0 ~/bf-sde-9.2.0.tgz
-    $0 ~/bf-sde-9.2.0.tgz ~/linux-4.14.49-ONL.tar.xz
-    SDE_INSTALL_TAR=~/bf-sde-9.2.0-install.tgz $0
+    $0 ~/bf-sde-9.3.2.tgz
+    $0 ~/bf-sde-9.3.2.tgz ~/linux-4.14.49-ONL.tar.xz
+    SDE_INSTALL_TAR=~/bf-sde-9.3.2-install.tgz $0
 
 Additional environment variables:
     SDE_INSTALL_TAR: Tar archive of BF SDE install (set to skip SDE build)
@@ -29,6 +29,7 @@ Additional environment variables:
     JOBS: The number of jobs to run simultaneously while building the base container. (Default: 4)
     DOCKER_IMG: Docker image to use for building (Default: stratumproject/build:build)
     RELEASE_BUILD: Optimized build with stripped symbols (Default: false)
+    BAZEL_CACHE: Path to Bazel cache (Default: <empty>)
 "
 }
 
@@ -82,6 +83,7 @@ Build variables:
   Build jobs: $JOBS
   Docker image for building: $DOCKER_IMG
   Release build enabled: ${RELEASE_BUILD:-false}
+  Bazel cache: ${BAZEL_CACHE:-none}
 "
 
 # Set build options for Stratum build
@@ -106,6 +108,12 @@ fi
 BAZEL_OPTS=""
 if [ -n "$RELEASE_BUILD" ]; then
   BAZEL_OPTS+="--config release "
+fi
+
+# Build with Bazel cache
+if [ -n "$BAZEL_CACHE" ]; then
+  DOCKER_OPTS+="-v $BAZEL_CACHE:/home/$USER/.cache "
+  DOCKER_OPTS+="--user $USER "
 fi
 
 # Build Stratum BF in Docker

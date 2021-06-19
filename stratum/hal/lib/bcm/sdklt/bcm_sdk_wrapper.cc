@@ -214,19 +214,13 @@ extern "C" void sdk_linkscan_callback(bcmlt_table_notif_info_t* notify_info,
     LOG(ERROR) << "BcmSdkWrapper singleton instance is not initialized.";
     return;
   }
-
-  bcmlt_entry_handle_t eh;
-  int unit;
-  PortState linkstatus;
-  uint64_t port, link = 0;
-  unit = notify_info->unit;
-  eh = notify_info->entry_hdl;
-  bcmlt_entry_field_get(eh, "PORT_ID", &port);
-  bcmlt_entry_field_get(eh, "LINK_STATE", &link);
-  LOG(INFO) << "Unit: " << unit << " Port: " << port << " Link: "
-            << (link ? "UP" : "DOWN") << ".";
-  linkstatus = link ? PORT_STATE_UP : PORT_STATE_DOWN;
-
+  int unit = notify_info->unit;
+  uint64_t port = 0, link = 0;
+  bcmlt_entry_field_get(notify_info->entry_hdl, "PORT_ID", &port);
+  bcmlt_entry_field_get(notify_info->entry_hdl, "LINK_STATE", &link);
+  PortState linkstatus = link ? PORT_STATE_UP : PORT_STATE_DOWN;
+  VLOG(1) << "Link on unit: " << unit << " Port: " << port << "changed to "
+          << (link ? "UP" : "DOWN") << ".";
   // Forward the event.
   bcm_sdk_wrapper->OnLinkscanEvent(unit, port, linkstatus);
 }
@@ -1823,11 +1817,11 @@ BcmSdkWrapper::~BcmSdkWrapper() { ShutdownAllUnits().IgnoreError(); }
     RETURN_IF_BCM_ERROR(bcmlt_entry_field_symbol_get(entry_hdl, LINKSCAN_MODEs,
                                                      &linkscan_mode));
     std::string linkscan(linkscan_mode);
-    if (linkscan.compare("SOFTWARE") == 0) {
+    if (linkscan == "SOFTWARE") {
       options->set_linkscan_mode(BcmPortOptions::LINKSCAN_MODE_SW);
-    } else if (linkscan.compare("HARDWARE") == 0) {
+    } else if (linkscan == "HARDWARE") {
       options->set_linkscan_mode(BcmPortOptions::LINKSCAN_MODE_HW);
-    } else if (linkscan.compare("NO_SCAN") == 0) {
+    } else if (linkscan == "NO_SCAN") {
       options->set_linkscan_mode(BcmPortOptions::LINKSCAN_MODE_NONE);
     }
   }
@@ -1853,7 +1847,7 @@ BcmSdkWrapper::~BcmSdkWrapper() { ShutdownAllUnits().IgnoreError(); }
     RETURN_IF_BCM_ERROR(
         bcmlt_entry_field_symbol_get(entry_hdl, OPMODEs, &op_mode));
     std::string opmode(op_mode);
-    if (opmode.compare(PC_PORT_OPMODE_AUTONEGs) == 0) {
+    if (opmode == PC_PORT_OPMODE_AUTONEGs) {
       options->set_autoneg(TRI_STATE_TRUE);
     } else {
       options->set_autoneg(TRI_STATE_FALSE);
@@ -1921,7 +1915,7 @@ BcmSdkWrapper::~BcmSdkWrapper() { ShutdownAllUnits().IgnoreError(); }
       bcmlt_entry_field_array_symbol_get(entry_hdl, STATEs, 0, sym_res, 140,
                                          &actual_count));
   std::string blocked(sym_res[port + 1]);
-  if (blocked.compare(BLOCKs) == 0) {
+  if (blocked == BLOCKs) {
     options->set_blocked(TRI_STATE_TRUE);
   }
   RETURN_IF_BCM_ERROR(bcmlt_entry_free(entry_hdl));
@@ -2217,11 +2211,11 @@ BcmSdkWrapper::GetPortLinkscanMode(int unit, int port) {
     RETURN_IF_BCM_ERROR(
         bcmlt_entry_field_symbol_get(entry_hdl, LINKSCAN_MODEs, &linkscan_str));
     std::string linkscan(linkscan_str);
-    if (linkscan.compare("SOFTWARE") == 0) {
+    if (linkscan == "SOFTWARE") {
       linkscan_mode = BcmPortOptions::LINKSCAN_MODE_SW;
-    } else if (linkscan.compare("HARDWARE") == 0) {
+    } else if (linkscan == "HARDWARE") {
       linkscan_mode = BcmPortOptions::LINKSCAN_MODE_HW;
-    } else if (linkscan.compare("NO_SCAN") == 0) {
+    } else if (linkscan == "NO_SCAN") {
       linkscan_mode = BcmPortOptions::LINKSCAN_MODE_NONE;
     }
   }
@@ -5670,7 +5664,7 @@ std::string HalAclFieldToBcm(BcmAclStage stage, BcmField::Type field) {
     }
     std::string bcm_qual_field = HalAclFieldToBcm(table.stage(), field.type());
     std::string unknown_qual = BcmField_Type_Name(BcmField::UNKNOWN);
-    if ((unknown_qual.compare(bcm_qual_field)) == 0) {
+    if (unknown_qual == bcm_qual_field) {
       return MAKE_ERROR(ERR_INVALID_PARAM)
              << "Attempted to create ACL table with invalid predefined "
              << " qualifier: " << field.ShortDebugString() << ".";
@@ -5746,7 +5740,7 @@ std::string HalAclFieldToBcm(BcmAclStage stage, BcmField::Type field) {
     }
     std::string bcm_qual_field = HalAclFieldToBcm(table.stage(), field.type());
     std::string unknown_qual = BcmField_Type_Name(BcmField::UNKNOWN);
-    if ((unknown_qual.compare(bcm_qual_field)) == 0) {
+    if (unknown_qual == bcm_qual_field) {
       return MAKE_ERROR(ERR_INVALID_PARAM)
              << "Attempted to create ACL table with invalid predefined "
              << "qualifier: " << field.ShortDebugString() << ".";
@@ -7477,7 +7471,7 @@ namespace {
     for (int i = BcmField::UNKNOWN + 1; i <= BcmField::Type_MAX; ++i) {
       auto field = static_cast<BcmField::Type>(i);
       std::string bcm_qual_field = HalAclFieldToBcm(stage, field);
-      if((unknown_qual.compare(bcm_qual_field)) == 0) {
+      if (unknown_qual == bcm_qual_field) {
          continue;
       }
       RETURN_IF_BCM_ERROR(bcmlt_entry_field_get(entry_hdl, bcm_qual_field.c_str(), &value));
@@ -7756,18 +7750,9 @@ pthread_t BcmSdkWrapper::GetDiagShellThreadId() const {
   return MAKE_ERROR(ERR_FEATURE_UNAVAILABLE) << "Not supported.";
 }
 
-void BcmSdkWrapper::OnLinkscanEvent(int unit, int port, PortState linkstatus) {
-  /* Create LinkscanEvent message. */
-  PortState state;
-  if (linkstatus == PORT_STATE_UP) {
-    state = PORT_STATE_UP;
-  } else if (linkstatus == PORT_STATE_DOWN) {
-    state = PORT_STATE_DOWN;
-  } else {
-    state = PORT_STATE_UNKNOWN;
-  }
-  LinkscanEvent event = {unit, port, state};
-
+void BcmSdkWrapper::OnLinkscanEvent(int unit, int port, PortState port_state) {
+  // Create LinkscanEvent message.
+  LinkscanEvent event = {unit, port, port_state};
   {
     absl::ReaderMutexLock l(&linkscan_writers_lock_);
     // Invoke the Writers based on priority.

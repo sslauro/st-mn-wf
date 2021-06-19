@@ -76,6 +76,8 @@ stratum/hal/lib/bcm/bcm_packetio_manager_mock.h
 stratum/hal/lib/bcm/bcm_packetio_manager_test.cc
 stratum/hal/lib/bcm/bcm_packetio_manager.cc
 stratum/hal/lib/bcm/bcm_packetio_manager.h
+stratum/hal/lib/bcm/bcm_sdk_interface.h
+stratum/hal/lib/bcm/bcm_sdk_mock.h
 stratum/hal/lib/bcm/bcm_serdes_db_manager_mock.h
 stratum/hal/lib/bcm/bcm_serdes_db_manager_test.cc
 stratum/hal/lib/bcm/bcm_serdes_db_manager.cc
@@ -96,7 +98,14 @@ stratum/hal/lib/common/file_service.h
 stratum/hal/lib/common/gnmi_events.h
 stratum/hal/lib/common/p4_service_test.cc
 stratum/hal/lib/common/p4_service.h
+stratum/hal/lib/common/utils_test.cc
+stratum/hal/lib/common/utils.cc
+stratum/hal/lib/common/utils.h
+stratum/hal/lib/common/yang_parse_tree_mock.h
+stratum/hal/lib/common/yang_parse_tree_paths.cc
 stratum/hal/lib/common/yang_parse_tree_paths.h
+stratum/hal/lib/common/yang_parse_tree_test.cc
+stratum/hal/lib/common/yang_parse_tree.h
 stratum/hal/lib/dummy/dummy_box.cc
 stratum/hal/lib/dummy/dummy_box.h
 stratum/hal/lib/dummy/dummy_chassis_mgr.cc

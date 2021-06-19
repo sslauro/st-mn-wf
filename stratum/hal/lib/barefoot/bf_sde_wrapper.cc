@@ -30,17 +30,25 @@
 #include "stratum/lib/utils.h"
 
 extern "C" {
+#include "bf_switchd/bf_switchd.h"
 #include "tofino/bf_pal/bf_pal_port_intf.h"
 #include "tofino/bf_pal/dev_intf.h"
 #include "tofino/bf_pal/pltfm_intf.h"
 #include "tofino/pdfixed/pd_devport_mgr.h"
 #include "tofino/pdfixed/pd_tm.h"
+#include "traffic_mgr/traffic_mgr.h"
 // Flag to enable detailed logging in the SDE pipe manager.
 extern bool stat_mgr_enable_detail_trace;
+// Get the /sys fs file name of the first Tofino ASIC.
+int switch_pci_sysfs_str_get(char* name, size_t name_size);
 }
 
 DEFINE_string(bfrt_sde_config_dir, "/var/run/stratum/bfrt_config",
               "The dir used by the SDE to load the device configuration.");
+DEFINE_bool(incompatible_enable_bfrt_legacy_bytestring_responses, true,
+            "Enables the legacy padded byte string format in P4Runtime "
+            "responses for Stratum-bfrt. The strings are left unchanged from "
+            "the underlying SDE.");
 
 namespace stratum {
 namespace hal {
@@ -62,13 +70,27 @@ inline constexpr uint64 BytesPerSecondToKbits(uint64 bytes) {
   return bytes / 125;
 }
 
-::util::Status DumpTableKey(const bfrt::BfRtTableKey* table_key) {
+::util::StatusOr<std::string> DumpTableMetadata(const bfrt::BfRtTable* table) {
+  std::string table_name;
+  RETURN_IF_BFRT_ERROR(table->tableNameGet(&table_name));
+  bf_rt_id_t table_id;
+  RETURN_IF_BFRT_ERROR(table->tableIdGet(&table_id));
+  bfrt::BfRtTable::TableType table_type;
+  RETURN_IF_BFRT_ERROR(table->tableTypeGet(&table_type));
+
+  return absl::StrCat("table_name: ", table_name, ", table_id: ", table_id,
+                      ", table_type: ", table_type);
+}
+
+::util::StatusOr<std::string> DumpTableKey(
+    const bfrt::BfRtTableKey* table_key) {
   const bfrt::BfRtTable* table;
   RETURN_IF_BFRT_ERROR(table_key->tableGet(&table));
   std::vector<bf_rt_id_t> key_field_ids;
   RETURN_IF_BFRT_ERROR(table->keyFieldIdListGet(&key_field_ids));
 
-  LOG(INFO) << "Table key {";
+  std::string s;
+  absl::StrAppend(&s, "bfrt_table_key { ");
   for (const auto& field_id : key_field_ids) {
     std::string field_name;
     bfrt::KeyFieldType key_type;
@@ -84,7 +106,17 @@ inline constexpr uint64 BytesPerSecondToKbits(uint64 bytes) {
         RETURN_IF_BFRT_ERROR(table_key->getValue(
             field_id, v.size(),
             reinterpret_cast<uint8*>(gtl::string_as_array(&v))));
-        value = StringToHex(v);
+        value = absl::StrCat("0x", StringToHex(v));
+        break;
+      }
+      case bfrt::KeyFieldType::TERNARY: {
+        std::string v(NumBitsToNumBytes(field_size), '\x00');
+        std::string m(NumBitsToNumBytes(field_size), '\x00');
+        RETURN_IF_BFRT_ERROR(table_key->getValueandMask(
+            field_id, v.size(),
+            reinterpret_cast<uint8*>(gtl::string_as_array(&v)),
+            reinterpret_cast<uint8*>(gtl::string_as_array(&m))));
+        value = absl::StrCat("0x", StringToHex(v), " & ", "0x", StringToHex(m));
         break;
       }
       case bfrt::KeyFieldType::RANGE: {
@@ -94,7 +126,16 @@ inline constexpr uint64 BytesPerSecondToKbits(uint64 bytes) {
             field_id, l.size(),
             reinterpret_cast<uint8*>(gtl::string_as_array(&l)),
             reinterpret_cast<uint8*>(gtl::string_as_array(&h))));
-        value = absl::StrCat(StringToHex(l), " - ", StringToHex(h));
+        value = absl::StrCat("0x", StringToHex(l), " - ", "0x", StringToHex(h));
+        break;
+      }
+      case bfrt::KeyFieldType::LPM: {
+        std::string v(NumBitsToNumBytes(field_size), '\x00');
+        uint16 p;
+        RETURN_IF_BFRT_ERROR(table_key->getValueLpm(
+            field_id, v.size(),
+            reinterpret_cast<uint8*>(gtl::string_as_array(&v)), &p));
+        value = absl::StrCat("0x", StringToHex(v), "/", p);
         break;
       }
       default:
@@ -102,25 +143,27 @@ inline constexpr uint64 BytesPerSecondToKbits(uint64 bytes) {
             << "Unknown key_type: " << static_cast<int>(key_type) << ".";
     }
 
-    LOG(INFO) << "\t" << field_name << ": field_id: " << field_id
-              << " key_type: " << static_cast<int>(key_type)
-              << " field_size: " << field_size << " value: " << value;
+    absl::StrAppend(&s, field_name, " { field_id: ", field_id,
+                    " key_type: ", static_cast<int>(key_type),
+                    " field_size: ", field_size, " value: ", value, " } ");
   }
-  LOG(INFO) << "}";
+  absl::StrAppend(&s, "}");
 
-  return ::util::OkStatus();
+  return s;
 }
 
-::util::Status DumpTableData(const bfrt::BfRtTableData* table_data) {
+::util::StatusOr<std::string> DumpTableData(
+    const bfrt::BfRtTableData* table_data) {
   const bfrt::BfRtTable* table;
   RETURN_IF_BFRT_ERROR(table_data->getParent(&table));
 
-  LOG(INFO) << "Table data {";
+  std::string s;
+  absl::StrAppend(&s, "bfrt_table_data { ");
   std::vector<bf_rt_id_t> data_field_ids;
   if (table->actionIdApplicable()) {
     bf_rt_id_t action_id;
     RETURN_IF_BFRT_ERROR(table_data->actionIdGet(&action_id));
-    LOG(INFO) << "\taction_id: " << action_id;
+    absl::StrAppend(&s, "action_id: ", action_id, " ");
     RETURN_IF_BFRT_ERROR(table->dataFieldIdListGet(action_id, &data_field_ids));
   } else {
     RETURN_IF_BFRT_ERROR(table->dataFieldIdListGet(&data_field_ids));
@@ -136,17 +179,16 @@ inline constexpr uint64 BytesPerSecondToKbits(uint64 bytes) {
       RETURN_IF_BFRT_ERROR(table_data->actionIdGet(&action_id));
       RETURN_IF_BFRT_ERROR(
           table->dataFieldNameGet(field_id, action_id, &field_name));
-      // FIXME
-      // RETURN_IF_BFRT_ERROR(table->dataFieldDataTypeGet(field_id,
-      // &data_type)); RETURN_IF_BFRT_ERROR(table->dataFieldSizeGet(field_id,
-      // &field_size)); RETURN_IF_BFRT_ERROR(table_data->isActive(field_id,
-      // &is_active));
+      RETURN_IF_BFRT_ERROR(
+          table->dataFieldDataTypeGet(field_id, action_id, &data_type));
+      RETURN_IF_BFRT_ERROR(
+          table->dataFieldSizeGet(field_id, action_id, &field_size));
     } else {
       RETURN_IF_BFRT_ERROR(table->dataFieldNameGet(field_id, &field_name));
       RETURN_IF_BFRT_ERROR(table->dataFieldDataTypeGet(field_id, &data_type));
       RETURN_IF_BFRT_ERROR(table->dataFieldSizeGet(field_id, &field_size));
-      RETURN_IF_BFRT_ERROR(table_data->isActive(field_id, &is_active));
     }
+    RETURN_IF_BFRT_ERROR(table_data->isActive(field_id, &is_active));
 
     std::string value;
     switch (data_type) {
@@ -161,13 +203,25 @@ inline constexpr uint64 BytesPerSecondToKbits(uint64 bytes) {
         RETURN_IF_BFRT_ERROR(table_data->getValue(
             field_id, v.size(),
             reinterpret_cast<uint8*>(gtl::string_as_array(&v))));
-        value = StringToHex(v);
+        value = absl::StrCat("0x", StringToHex(v));
         break;
       }
       case bfrt::DataType::INT_ARR: {
-        std::vector<uint64_t> v;
+        // TODO(max): uint32 seems to be the most common type, but we could
+        // differentiate based on field_size, if needed.
+        std::vector<uint32_t> v;
         RETURN_IF_BFRT_ERROR(table_data->getValue(field_id, &v));
         value = PrintVector(v, ",");
+        break;
+      }
+      case bfrt::DataType::BOOL_ARR: {
+        std::vector<bool> bools;
+        RETURN_IF_BFRT_ERROR(table_data->getValue(field_id, &bools));
+        std::vector<uint16> bools_as_ints;
+        for (bool b : bools) {
+          bools_as_ints.push_back(b);
+        }
+        value = PrintVector(bools_as_ints, ",");
         break;
       }
       default:
@@ -175,14 +229,14 @@ inline constexpr uint64 BytesPerSecondToKbits(uint64 bytes) {
             << "Unknown data_type: " << static_cast<int>(data_type) << ".";
     }
 
-    LOG(INFO) << "\t" << field_name << ": field_id: " << field_id
-              << " data_type: " << static_cast<int>(data_type)
-              << " field_size: " << field_size << " value: " << value
-              << " is_active: " << is_active;
+    absl::StrAppend(&s, field_name, " { field_id: ", field_id,
+                    " data_type: ", static_cast<int>(data_type),
+                    " field_size: ", field_size, " value: ", value,
+                    " is_active: ", is_active, " } ");
   }
-  LOG(INFO) << "}";
+  absl::StrAppend(&s, "}");
 
-  return ::util::OkStatus();
+  return s;
 }
 
 ::util::Status GetField(const bfrt::BfRtTableKey& table_key,
@@ -435,7 +489,7 @@ template <typename T>
   if (table_type == bfrt::BfRtTable::TableType::METER ||
       table_type == bfrt::BfRtTable::TableType::COUNTER) {
     size_t table_size;
-#if defined(SDE_9_4_0)
+#if defined(SDE_9_4_0) || defined(SDE_9_5_0)
     RETURN_IF_BFRT_ERROR(
         table->tableSizeGet(*bfrt_session, bf_dev_target, &table_size));
 #else
@@ -566,7 +620,7 @@ template <typename T>
   RETURN_IF_BFRT_ERROR(table_key_->tableGet(&table));
   bf_rt_id_t priority_field_id;
   RETURN_IF_BFRT_ERROR(
-      table->keyFieldIdGet("$MATCH_PRIORITY", &priority_field_id));
+      table->keyFieldIdGet(kMatchPriority, &priority_field_id));
   RETURN_IF_BFRT_ERROR(table_key_->setValue(priority_field_id, priority));
 
   return ::util::OkStatus();
@@ -582,6 +636,9 @@ template <typename T>
   RETURN_IF_BFRT_ERROR(table_key_->getValue(
       id, value->size(),
       reinterpret_cast<uint8*>(gtl::string_as_array(value))));
+  if (!FLAGS_incompatible_enable_bfrt_legacy_bytestring_responses) {
+    *value = ByteStringToP4RuntimeByteString(*value);
+  }
 
   return ::util::OkStatus();
 }
@@ -599,6 +656,10 @@ template <typename T>
   RETURN_IF_BFRT_ERROR(table_key_->getValueandMask(
       id, value->size(), reinterpret_cast<uint8*>(gtl::string_as_array(value)),
       reinterpret_cast<uint8*>(gtl::string_as_array(mask))));
+  if (!FLAGS_incompatible_enable_bfrt_legacy_bytestring_responses) {
+    *value = ByteStringToP4RuntimeByteString(*value);
+    *mask = ByteStringToP4RuntimeByteString(*mask);
+  }
 
   return ::util::OkStatus();
 }
@@ -614,6 +675,9 @@ template <typename T>
   RETURN_IF_BFRT_ERROR(table_key_->getValueLpm(
       id, prefix->size(),
       reinterpret_cast<uint8*>(gtl::string_as_array(prefix)), prefix_length));
+  if (!FLAGS_incompatible_enable_bfrt_legacy_bytestring_responses) {
+    *prefix = ByteStringToP4RuntimeByteString(*prefix);
+  }
 
   return ::util::OkStatus();
 }
@@ -631,6 +695,10 @@ template <typename T>
   RETURN_IF_BFRT_ERROR(table_key_->getValueRange(
       id, low->size(), reinterpret_cast<uint8*>(gtl::string_as_array(low)),
       reinterpret_cast<uint8*>(gtl::string_as_array(high))));
+  if (!FLAGS_incompatible_enable_bfrt_legacy_bytestring_responses) {
+    *low = ByteStringToP4RuntimeByteString(*low);
+    *high = ByteStringToP4RuntimeByteString(*high);
+  }
 
   return ::util::OkStatus();
 }
@@ -639,7 +707,7 @@ template <typename T>
   // const bfrt::BfRtTable* table;
   // RETURN_IF_BFRT_ERROR(table_key_->tableGet(&table));
   uint64 bf_priority;
-  RETURN_IF_ERROR(GetField(*table_key_, "$MATCH_PRIORITY", &bf_priority));
+  RETURN_IF_ERROR(GetField(*table_key_, kMatchPriority, &bf_priority));
   *priority = bf_priority;
 
   return ::util::OkStatus();
@@ -697,12 +765,15 @@ TableKey::CreateTableKey(const bfrt::BfRtInfo* bfrt_info_, int table_id) {
   RETURN_IF_BFRT_ERROR(table_data_->getValue(
       id, value->size(),
       reinterpret_cast<uint8*>(gtl::string_as_array(value))));
+  if (!FLAGS_incompatible_enable_bfrt_legacy_bytestring_responses) {
+    *value = ByteStringToP4RuntimeByteString(*value);
+  }
 
   return ::util::OkStatus();
 }
 
 ::util::Status TableData::SetActionMemberId(uint64 action_member_id) {
-  return SetField(table_data_.get(), "$ACTION_MEMBER_ID", action_member_id);
+  return SetField(table_data_.get(), kActionMemberId, action_member_id);
 }
 
 ::util::Status TableData::GetActionMemberId(uint64* action_member_id) const {
@@ -717,7 +788,7 @@ TableKey::CreateTableKey(const bfrt::BfRtInfo* bfrt_info_, int table_id) {
   }
   bf_rt_id_t field_id;
   bfrt::DataType data_type;
-  RETURN_IF_BFRT_ERROR(table->dataFieldIdGet("$ACTION_MEMBER_ID", &field_id));
+  RETURN_IF_BFRT_ERROR(table->dataFieldIdGet(kActionMemberId, &field_id));
   RETURN_IF_BFRT_ERROR(table->dataFieldDataTypeGet(field_id, &data_type));
   CHECK_RETURN_IF_FALSE(data_type == bfrt::DataType::UINT64)
       << "Requested uint64 but field $ACTION_MEMBER_ID has type "
@@ -734,7 +805,7 @@ TableKey::CreateTableKey(const bfrt::BfRtInfo* bfrt_info_, int table_id) {
 }
 
 ::util::Status TableData::SetSelectorGroupId(uint64 selector_group_id) {
-  return SetField(table_data_.get(), "$SELECTOR_GROUP_ID", selector_group_id);
+  return SetField(table_data_.get(), kSelectorGroupId, selector_group_id);
 }
 
 ::util::Status TableData::GetSelectorGroupId(uint64* selector_group_id) const {
@@ -749,7 +820,7 @@ TableKey::CreateTableKey(const bfrt::BfRtInfo* bfrt_info_, int table_id) {
   }
   bf_rt_id_t field_id;
   bfrt::DataType data_type;
-  RETURN_IF_BFRT_ERROR(table->dataFieldIdGet("$SELECTOR_GROUP_ID", &field_id));
+  RETURN_IF_BFRT_ERROR(table->dataFieldIdGet(kSelectorGroupId, &field_id));
   RETURN_IF_BFRT_ERROR(table->dataFieldDataTypeGet(field_id, &data_type));
   CHECK_RETURN_IF_FALSE(data_type == bfrt::DataType::UINT64)
       << "Requested uint64 but field $SELECTOR_GROUP_ID has type "
@@ -765,52 +836,11 @@ TableKey::CreateTableKey(const bfrt::BfRtInfo* bfrt_info_, int table_id) {
   return ::util::OkStatus();
 }
 
-::util::Status TableData::SetOnlyCounterData(uint64 bytes, uint64 packets) {
-  const bfrt::BfRtTable* table;
-  RETURN_IF_BFRT_ERROR(table_data_->getParent(&table));
-
-  bf_rt_id_t action_id = 0;
-  if (table->actionIdApplicable()) {
-    RETURN_IF_BFRT_ERROR(table_data_->actionIdGet(&action_id));
-  }
-  if (!action_id) {
-    bf_rt_id_t table_id;
-    table->tableIdGet(&table_id);
-    std::string table_name;
-    table->tableNameGet(&table_name);
-    LOG(WARNING) << "Trying to set counter data on a table entry without "
-                 << "action ID. This might not behave as expected, please "
-                 << "report this to the Stratum authors: table_id " << table_id
-                 << " table_name " << table_name << ".";
-  }
-  std::vector<bf_rt_id_t> ids;
-  bf_rt_id_t field_id_bytes;
-  bf_status_t has_bytes =
-      table->dataFieldIdGet("$COUNTER_SPEC_BYTES", action_id, &field_id_bytes);
-  if (has_bytes == BF_SUCCESS) {
-    ids.push_back(field_id_bytes);
-  }
-  bf_rt_id_t field_id_packets;
-  bf_status_t has_packets =
-      table->dataFieldIdGet("$COUNTER_SPEC_PKTS", action_id, &field_id_packets);
-  if (has_packets == BF_SUCCESS) {
-    ids.push_back(field_id_packets);
-  }
-  if (action_id) {
-    RETURN_IF_BFRT_ERROR(table->dataReset(ids, action_id, table_data_.get()));
-  } else {
-    RETURN_IF_BFRT_ERROR(table->dataReset(ids, table_data_.get()));
-  }
-  if (has_bytes == BF_SUCCESS) {
-    RETURN_IF_BFRT_ERROR(table_data_->setValue(field_id_bytes, bytes));
-  }
-  if (has_packets == BF_SUCCESS) {
-    RETURN_IF_BFRT_ERROR(table_data_->setValue(field_id_packets, packets));
-  }
-
-  return ::util::OkStatus();
-}
-
+// The P4Runtime `CounterData` message has no mechanism to differentiate between
+// byte-only, packet-only or both counter types. This make it impossible to
+// recognize a counter reset (set, e.g., bytes to zero) request from a set
+// request for a packet-only counter. Therefore we have to be careful when
+// making set calls for those fields against the SDE.
 ::util::Status TableData::SetCounterData(uint64 bytes, uint64 packets) {
   const bfrt::BfRtTable* table;
   RETURN_IF_BFRT_ERROR(table_data_->getParent(&table));
@@ -829,17 +859,17 @@ TableKey::CreateTableKey(const bfrt::BfRtInfo* bfrt_info_, int table_id) {
                  << "report this to the Stratum authors: table_id " << table_id
                  << " table_name " << table_name << ".";
   }
-  bf_rt_id_t field_id_bytes;
-  bf_status_t has_bytes =
-      table->dataFieldIdGet("$COUNTER_SPEC_BYTES", action_id, &field_id_bytes);
-  bf_rt_id_t field_id_packets;
-  bf_status_t has_packets =
-      table->dataFieldIdGet("$COUNTER_SPEC_PKTS", action_id, &field_id_packets);
-  if (has_bytes == BF_SUCCESS) {
-    RETURN_IF_BFRT_ERROR(table_data_->setValue(field_id_bytes, bytes));
-  }
-  if (has_packets == BF_SUCCESS) {
-    RETURN_IF_BFRT_ERROR(table_data_->setValue(field_id_packets, packets));
+  std::vector<bf_rt_id_t> data_field_ids;
+  RETURN_IF_BFRT_ERROR(table->dataFieldIdListGet(&data_field_ids));
+  for (const auto& field_id : data_field_ids) {
+    std::string field_name;
+    RETURN_IF_BFRT_ERROR(table->dataFieldNameGet(field_id, &field_name));
+    if (field_name == kCounterBytes) {
+      RETURN_IF_BFRT_ERROR(table_data_->setValue(field_id, bytes));
+    } else if (field_name == kCounterPackets) {
+      RETURN_IF_BFRT_ERROR(table_data_->setValue(field_id, packets));
+    }
+    // Uninteresting field, ignore.
   }
 
   return ::util::OkStatus();
@@ -851,37 +881,35 @@ TableKey::CreateTableKey(const bfrt::BfRtInfo* bfrt_info_, int table_id) {
   const bfrt::BfRtTable* table;
   RETURN_IF_BFRT_ERROR(table_data_->getParent(&table));
 
+  // Clear values in case we set only one of them later.
+  *bytes = 0;
+  *packets = 0;
+
   bf_rt_id_t action_id = 0;
   if (table->actionIdApplicable()) {
     RETURN_IF_BFRT_ERROR(table_data_->actionIdGet(&action_id));
   }
 
-  bf_rt_id_t field_id;
-  // Try to read byte counter.
-  bf_status_t bf_status;
+  std::vector<bf_rt_id_t> data_field_ids;
   if (action_id) {
-    bf_status =
-        table->dataFieldIdGet("$COUNTER_SPEC_BYTES", action_id, &field_id);
+    RETURN_IF_BFRT_ERROR(table->dataFieldIdListGet(action_id, &data_field_ids));
   } else {
-    bf_status = table->dataFieldIdGet("$COUNTER_SPEC_BYTES", &field_id);
+    RETURN_IF_BFRT_ERROR(table->dataFieldIdListGet(&data_field_ids));
   }
-  if (bf_status == BF_SUCCESS) {
-    uint64 counter_val;
-    RETURN_IF_BFRT_ERROR(table_data_->getValue(field_id, &counter_val));
-    *bytes = counter_val;
-  }
-
-  // Try to read packet counter.
-  if (action_id) {
-    bf_status =
-        table->dataFieldIdGet("$COUNTER_SPEC_PKTS", action_id, &field_id);
-  } else {
-    bf_status = table->dataFieldIdGet("$COUNTER_SPEC_PKTS", &field_id);
-  }
-  if (bf_status == BF_SUCCESS) {
-    uint64 counter_val;
-    RETURN_IF_BFRT_ERROR(table_data_->getValue(field_id, &counter_val));
-    *packets = counter_val;
+  for (const auto& field_id : data_field_ids) {
+    std::string field_name;
+    if (action_id) {
+      RETURN_IF_BFRT_ERROR(
+          table->dataFieldNameGet(field_id, action_id, &field_name));
+    } else {
+      RETURN_IF_BFRT_ERROR(table->dataFieldNameGet(field_id, &field_name));
+    }
+    if (field_name == kCounterBytes) {
+      RETURN_IF_BFRT_ERROR(table_data_->getValue(field_id, bytes));
+    } else if (field_name == kCounterPackets) {
+      RETURN_IF_BFRT_ERROR(table_data_->getValue(field_id, packets));
+    }
+    // Uninteresting field, ignore.
   }
 
   return ::util::OkStatus();
@@ -933,13 +961,15 @@ namespace {
 // A callback function executed in SDE port state change thread context.
 bf_status_t sde_port_status_callback(bf_dev_id_t device, bf_dev_port_t dev_port,
                                      bool up, void* cookie) {
+  absl::Time timestamp = absl::Now();
   BfSdeWrapper* bf_sde_wrapper = BfSdeWrapper::GetSingleton();
   if (!bf_sde_wrapper) {
     LOG(ERROR) << "BfSdeWrapper singleton instance is not initialized.";
     return BF_INTERNAL_ERROR;
   }
   // Forward the event.
-  auto status = bf_sde_wrapper->OnPortStatusEvent(device, dev_port, up);
+  auto status =
+      bf_sde_wrapper->OnPortStatusEvent(device, dev_port, up, timestamp);
 
   return status.ok() ? BF_SUCCESS : BF_INTERNAL_ERROR;
 }
@@ -1020,7 +1050,8 @@ bf_status_t sde_port_status_callback(bf_dev_id_t device, bf_dev_port_t dev_port,
 BfSdeWrapper* BfSdeWrapper::singleton_ = nullptr;
 ABSL_CONST_INIT absl::Mutex BfSdeWrapper::init_lock_(absl::kConstInit);
 
-BfSdeWrapper::BfSdeWrapper() : port_status_event_writer_(nullptr) {}
+BfSdeWrapper::BfSdeWrapper()
+    : port_status_event_writer_(nullptr), device_to_ppg_handles_() {}
 
 ::util::StatusOr<PortState> BfSdeWrapper::GetPortState(int device, int port) {
   int state;
@@ -1059,10 +1090,11 @@ BfSdeWrapper::BfSdeWrapper() : port_status_event_writer_(nullptr) {}
   return ::util::OkStatus();
 }
 
-::util::Status BfSdeWrapper::OnPortStatusEvent(int device, int port, bool up) {
+::util::Status BfSdeWrapper::OnPortStatusEvent(int device, int port, bool up,
+                                               absl::Time timestamp) {
   // Create PortStatusEvent message.
   PortState state = up ? PORT_STATE_UP : PORT_STATE_DOWN;
-  PortStatusEvent event = {device, port, state};
+  PortStatusEvent event = {device, port, state, timestamp};
 
   {
     absl::ReaderMutexLock l(&port_status_event_writer_lock_);
@@ -1141,6 +1173,220 @@ BfSdeWrapper::BfSdeWrapper() : port_status_event_writer_(nullptr) {}
   return ::util::OkStatus();
 }
 
+namespace {
+::util::StatusOr<bf_tm_app_pool_t> ApplicationPoolToTofinoPool(
+    TofinoConfig::TofinoQosConfig::ApplicationPool pool) {
+  switch (pool) {
+    case TofinoConfig::TofinoQosConfig::INGRESS_APP_POOL_0:
+      return BF_TM_IG_APP_POOL_0;
+    case TofinoConfig::TofinoQosConfig::INGRESS_APP_POOL_1:
+      return BF_TM_IG_APP_POOL_1;
+    case TofinoConfig::TofinoQosConfig::INGRESS_APP_POOL_2:
+      return BF_TM_IG_APP_POOL_2;
+    case TofinoConfig::TofinoQosConfig::INGRESS_APP_POOL_3:
+      return BF_TM_IG_APP_POOL_3;
+    case TofinoConfig::TofinoQosConfig::EGRESS_APP_POOL_0:
+      return BF_TM_EG_APP_POOL_0;
+    case TofinoConfig::TofinoQosConfig::EGRESS_APP_POOL_1:
+      return BF_TM_EG_APP_POOL_1;
+    case TofinoConfig::TofinoQosConfig::EGRESS_APP_POOL_2:
+      return BF_TM_EG_APP_POOL_2;
+    case TofinoConfig::TofinoQosConfig::EGRESS_APP_POOL_3:
+      return BF_TM_EG_APP_POOL_3;
+    default:
+      RETURN_ERROR(ERR_INVALID_PARAM) << "Invalid pool " << pool;
+  }
+}
+
+::util::StatusOr<bf_tm_ppg_baf_t> BafToTofinoPpgBaf(
+    TofinoConfig::TofinoQosConfig::Baf baf) {
+  switch (baf) {
+    case TofinoConfig::TofinoQosConfig::BAF_1_POINT_5_PERCENT:
+      return BF_TM_PPG_BAF_1_POINT_5_PERCENT;
+    case TofinoConfig::TofinoQosConfig::BAF_3_PERCENT:
+      return BF_TM_PPG_BAF_3_PERCENT;
+    case TofinoConfig::TofinoQosConfig::BAF_6_PERCENT:
+      return BF_TM_PPG_BAF_6_PERCENT;
+    case TofinoConfig::TofinoQosConfig::BAF_11_PERCENT:
+      return BF_TM_PPG_BAF_11_PERCENT;
+    case TofinoConfig::TofinoQosConfig::BAF_20_PERCENT:
+      return BF_TM_PPG_BAF_20_PERCENT;
+    case TofinoConfig::TofinoQosConfig::BAF_33_PERCENT:
+      return BF_TM_PPG_BAF_33_PERCENT;
+    case TofinoConfig::TofinoQosConfig::BAF_50_PERCENT:
+      return BF_TM_PPG_BAF_50_PERCENT;
+    case TofinoConfig::TofinoQosConfig::BAF_66_PERCENT:
+      return BF_TM_PPG_BAF_66_PERCENT;
+    case TofinoConfig::TofinoQosConfig::BAF_80_PERCENT:
+      return BF_TM_PPG_BAF_80_PERCENT;
+    case TofinoConfig::TofinoQosConfig::DISABLE_BAF:
+      return BF_TM_PPG_BAF_DISABLE;
+    default:
+      RETURN_ERROR(ERR_INVALID_PARAM) << "Invalid baf " << baf;
+  }
+}
+
+::util::StatusOr<bf_tm_queue_baf_t> BafToTofinoQueueBaf(
+    TofinoConfig::TofinoQosConfig::Baf baf) {
+  switch (baf) {
+    case TofinoConfig::TofinoQosConfig::BAF_1_POINT_5_PERCENT:
+      return BF_TM_Q_BAF_1_POINT_5_PERCENT;
+    case TofinoConfig::TofinoQosConfig::BAF_3_PERCENT:
+      return BF_TM_Q_BAF_3_PERCENT;
+    case TofinoConfig::TofinoQosConfig::BAF_6_PERCENT:
+      return BF_TM_Q_BAF_6_PERCENT;
+    case TofinoConfig::TofinoQosConfig::BAF_11_PERCENT:
+      return BF_TM_Q_BAF_11_PERCENT;
+    case TofinoConfig::TofinoQosConfig::BAF_20_PERCENT:
+      return BF_TM_Q_BAF_20_PERCENT;
+    case TofinoConfig::TofinoQosConfig::BAF_33_PERCENT:
+      return BF_TM_Q_BAF_33_PERCENT;
+    case TofinoConfig::TofinoQosConfig::BAF_50_PERCENT:
+      return BF_TM_Q_BAF_50_PERCENT;
+    case TofinoConfig::TofinoQosConfig::BAF_66_PERCENT:
+      return BF_TM_Q_BAF_66_PERCENT;
+    case TofinoConfig::TofinoQosConfig::BAF_80_PERCENT:
+      return BF_TM_Q_BAF_80_PERCENT;
+    case TofinoConfig::TofinoQosConfig::DISABLE_BAF:
+      return BF_TM_Q_BAF_DISABLE;
+    default:
+      RETURN_ERROR(ERR_INVALID_PARAM) << "Invalid baf " << baf;
+  }
+}
+
+::util::StatusOr<bf_tm_sched_prio_t> PriorityToTofinoSchedulingPriority(
+    TofinoConfig::TofinoQosConfig::SchedulingPriority priority) {
+  switch (priority) {
+    case TofinoConfig::TofinoQosConfig::PRIO_0:
+      return BF_TM_SCH_PRIO_0;
+    case TofinoConfig::TofinoQosConfig::PRIO_1:
+      return BF_TM_SCH_PRIO_1;
+    case TofinoConfig::TofinoQosConfig::PRIO_2:
+      return BF_TM_SCH_PRIO_2;
+    case TofinoConfig::TofinoQosConfig::PRIO_3:
+      return BF_TM_SCH_PRIO_3;
+    case TofinoConfig::TofinoQosConfig::PRIO_4:
+      return BF_TM_SCH_PRIO_4;
+    case TofinoConfig::TofinoQosConfig::PRIO_5:
+      return BF_TM_SCH_PRIO_5;
+    case TofinoConfig::TofinoQosConfig::PRIO_6:
+      return BF_TM_SCH_PRIO_6;
+    case TofinoConfig::TofinoQosConfig::PRIO_7:
+      return BF_TM_SCH_PRIO_7;
+    default:
+      RETURN_ERROR(ERR_INVALID_PARAM) << "Invalid priority " << priority;
+  }
+}
+
+}  // namespace
+
+::util::Status BfSdeWrapper::ConfigureQos(
+    int device, const TofinoConfig::TofinoQosConfig& qos_config) {
+  absl::WriterMutexLock l(&data_lock_);
+  // Configure the application buffer pools.
+  for (const auto& pool_config : qos_config.pool_configs()) {
+    ASSIGN_OR_RETURN(bf_tm_app_pool_t pool,
+                     ApplicationPoolToTofinoPool(pool_config.pool()));
+    RETURN_IF_BFRT_ERROR(
+        bf_tm_pool_size_set(device, pool, pool_config.pool_size()));
+    if (pool_config.enable_color_drop()) {
+      RETURN_IF_BFRT_ERROR(bf_tm_pool_color_drop_enable(device, pool));
+    } else {
+      RETURN_IF_BFRT_ERROR(bf_tm_pool_color_drop_disable(device, pool));
+    }
+  }
+
+  // Configure the PPGs.
+  for (auto const& ppg : device_to_ppg_handles_[device]) {
+    RETURN_IF_BFRT_ERROR(bf_tm_ppg_free(device, ppg));
+  }
+  device_to_ppg_handles_[device].clear();
+  for (const auto& ppg_config : qos_config.ppg_configs()) {
+    device_to_ppg_handles_;
+    bf_tm_ppg_hdl ppg;
+    if (ppg_config.is_default_ppg()) {
+      RETURN_IF_BFRT_ERROR(
+          bf_tm_ppg_defaultppg_get(device, ppg_config.sdk_port(), &ppg));
+    } else {
+      RETURN_IF_BFRT_ERROR(
+          bf_tm_ppg_allocate(device, ppg_config.sdk_port(), &ppg));
+      device_to_ppg_handles_[device].push_back(ppg);
+    }
+    RETURN_IF_BFRT_ERROR(bf_tm_ppg_guaranteed_min_limit_set(
+        device, ppg, ppg_config.minimum_guaranteed_cells()));
+    ASSIGN_OR_RETURN(bf_tm_app_pool_t pool,
+                     ApplicationPoolToTofinoPool(ppg_config.pool()));
+    ASSIGN_OR_RETURN(bf_tm_ppg_baf_t baf, BafToTofinoPpgBaf(ppg_config.baf()));
+    RETURN_IF_BFRT_ERROR(bf_tm_ppg_app_pool_usage_set(
+        device, ppg, pool, ppg_config.base_use_limit(), baf,
+        ppg_config.hysteresis()));
+    RETURN_IF_BFRT_ERROR(bf_tm_port_ingress_drop_limit_set(
+        device, ppg_config.sdk_port(), ppg_config.ingress_drop_limit()));
+    RETURN_IF_BFRT_ERROR(
+        bf_tm_ppg_icos_mapping_set(device, ppg, ppg_config.icos_bitmap()));
+  }
+
+  // Configure the queues.
+  for (const auto& queue_config : qos_config.queue_configs()) {
+    for (const auto& queue_mapping : queue_config.queue_mapping()) {
+      RETURN_IF_BFRT_ERROR(bf_tm_q_guaranteed_min_limit_set(
+          device, queue_config.sdk_port(), queue_mapping.queue_id(),
+          queue_mapping.minimum_guaranteed_cells()));
+      ASSIGN_OR_RETURN(bf_tm_app_pool_t pool,
+                       ApplicationPoolToTofinoPool(queue_mapping.pool()));
+      ASSIGN_OR_RETURN(bf_tm_queue_baf_t baf,
+                       BafToTofinoQueueBaf(queue_mapping.baf()));
+      RETURN_IF_BFRT_ERROR(bf_tm_q_app_pool_usage_set(
+          device, queue_config.sdk_port(), queue_mapping.queue_id(), pool,
+          queue_mapping.base_use_limit(), baf, queue_mapping.hysteresis()));
+      ASSIGN_OR_RETURN(
+          bf_tm_sched_prio_t priority,
+          PriorityToTofinoSchedulingPriority(queue_mapping.priority()));
+      RETURN_IF_BFRT_ERROR(bf_tm_sched_q_priority_set(
+          device, queue_config.sdk_port(), queue_mapping.queue_id(), priority));
+      RETURN_IF_BFRT_ERROR(bf_tm_sched_q_dwrr_weight_set(
+          device, queue_config.sdk_port(), queue_mapping.queue_id(),
+          queue_mapping.weight()));
+      bool rate_in_pps = queue_mapping.max_shaping_is_in_pps();
+      uint32 burst_size;
+      uint32 max_rate;
+      if (rate_in_pps) {
+        burst_size = queue_mapping.max_burst();
+        max_rate = queue_mapping.max_rate();
+      } else {
+        burst_size = queue_mapping.max_burst();
+        max_rate = queue_mapping.max_rate() / 1000;  // SDE expects kbits
+      }
+      RETURN_IF_BFRT_ERROR(bf_tm_sched_q_shaping_rate_set(
+          device, queue_config.sdk_port(), queue_mapping.queue_id(),
+          rate_in_pps, burst_size, max_rate));
+      RETURN_IF_BFRT_ERROR(bf_tm_sched_q_max_shaping_rate_enable(
+          device, queue_config.sdk_port(), queue_mapping.queue_id()));
+      // Set guaranteed minimum rate.
+      bool min_rate_in_pps = queue_mapping.min_shaping_is_in_pps();
+      uint32 min_burst_size;
+      uint32 min_rate;
+      if (min_rate_in_pps) {
+        min_burst_size = queue_mapping.min_burst();
+        min_rate = queue_mapping.min_rate();
+      } else {
+        min_burst_size = queue_mapping.min_burst();
+        min_rate = queue_mapping.min_rate() / 1000;  // SDE expects kbits
+      }
+      RETURN_IF_BFRT_ERROR(bf_tm_sched_q_guaranteed_rate_set(
+          device, queue_config.sdk_port(), queue_mapping.queue_id(),
+          min_rate_in_pps, min_burst_size, min_rate));
+      RETURN_IF_BFRT_ERROR(bf_tm_sched_q_guaranteed_rate_enable(
+          device, queue_config.sdk_port(), queue_mapping.queue_id()));
+    }
+    RETURN_IF_BFRT_ERROR(bf_tm_port_q_mapping_set(
+        device, queue_config.sdk_port(), queue_config.queue_mapping_size(),
+        /*queue_mapping*/ nullptr));
+  }
+
+  return ::util::OkStatus();
+}
+
 ::util::Status BfSdeWrapper::SetPortAutonegPolicy(int device, int port,
                                                   TriState autoneg) {
   ASSIGN_OR_RETURN(auto autoneg_v, AutonegHalToBf(autoneg));
@@ -1188,7 +1434,9 @@ bool BfSdeWrapper::IsValidPort(int device, int port) {
   return is_sw_model;
 }
 
-std::string BfSdeWrapper::GetBfChipType(int device) const {
+// Helper functions around reading the switch SKU.
+namespace {
+std::string GetBfChipFamilyAndType(int device) {
   bf_dev_type_t dev_type = lld_sku_get_dev_type(device);
   switch (dev_type) {
     case BF_DEV_BFNT10064Q:
@@ -1254,6 +1502,32 @@ std::string BfSdeWrapper::GetBfChipType(int device) const {
   }
 }
 
+std::string GetBfChipRevision(int device) {
+  bf_sku_chip_part_rev_t revision_number;
+  lld_sku_get_chip_part_revision_number(device, &revision_number);
+  switch (revision_number) {
+    case BF_SKU_CHIP_PART_REV_A0:
+      return "A0";
+    case BF_SKU_CHIP_PART_REV_B0:
+      return "B0";
+    default:
+      return "UNKOWN";
+  }
+}
+
+std::string GetBfChipId(int device) {
+  uint64 chip_id = 0;
+  lld_sku_get_chip_id(device, &chip_id);
+  return absl::StrCat("0x", absl::Hex(chip_id));
+}
+}  // namespace
+
+std::string BfSdeWrapper::GetBfChipType(int device) const {
+  return absl::StrCat(GetBfChipFamilyAndType(device), ", revision ",
+                      GetBfChipRevision(device), ", chip_id ",
+                      GetBfChipId(device));
+}
+
 std::string BfSdeWrapper::GetSdeVersion() const {
 #if defined(SDE_9_1_0)
   return "9.1.0";
@@ -1263,8 +1537,12 @@ std::string BfSdeWrapper::GetSdeVersion() const {
   return "9.3.0";
 #elif defined(SDE_9_3_1)
   return "9.3.1";
+#elif defined(SDE_9_3_2)
+  return "9.3.2";
 #elif defined(SDE_9_4_0)
   return "9.4.0";
+#elif defined(SDE_9_5_0)
+  return "9.5.0";
 #else
 #error Unsupported SDE version
 #endif
@@ -1313,7 +1591,57 @@ std::string BfSdeWrapper::GetSdeVersion() const {
   return ::util::OkStatus();
 }
 
+::util::Status BfSdeWrapper::SetDeflectOnDropDestination(int device, int port,
+                                                         int queue) {
+  // The DoD destination must be a pipe-local port.
+  p4_pd_tm_pipe_t pipe = DEV_PORT_TO_PIPE(port);
+  RETURN_IF_BFRT_ERROR(
+      p4_pd_tm_set_negative_mirror_dest(device, pipe, port, queue));
+  return ::util::OkStatus();
+}
+
 // BFRT
+
+::util::Status BfSdeWrapper::InitializeSde(const std::string& sde_install_path,
+                                           const std::string& sde_config_file,
+                                           bool run_in_background) {
+  CHECK_RETURN_IF_FALSE(sde_install_path != "")
+      << "sde_install_path is required";
+  CHECK_RETURN_IF_FALSE(sde_config_file != "") << "sde_config_file is required";
+
+  // Parse bf_switchd arguments.
+  auto switchd_main_ctx = absl::make_unique<bf_switchd_context_t>();
+  switchd_main_ctx->install_dir = strdup(sde_install_path.c_str());
+  switchd_main_ctx->conf_file = strdup(sde_config_file.c_str());
+  switchd_main_ctx->skip_p4 = true;
+  if (run_in_background) {
+    switchd_main_ctx->running_in_background = true;
+  } else {
+    switchd_main_ctx->shell_set_ucli = true;
+  }
+
+  // Determine if kernel mode packet driver is loaded.
+  std::string bf_sysfs_fname;
+  {
+    char buf[128] = {};
+    RETURN_IF_BFRT_ERROR(switch_pci_sysfs_str_get(buf, sizeof(buf)));
+    bf_sysfs_fname = buf;
+  }
+  absl::StrAppend(&bf_sysfs_fname, "/dev_add");
+  LOG(INFO) << "bf_sysfs_fname: " << bf_sysfs_fname;
+  if (PathExists(bf_sysfs_fname)) {
+    // Override previous parsing if bf_kpkt KLM was loaded.
+    LOG(INFO)
+        << "kernel mode packet driver present, forcing kernel_pkt option!";
+    switchd_main_ctx->kernel_pkt = true;
+  }
+
+  RETURN_IF_BFRT_ERROR(bf_switchd_lib_init(switchd_main_ctx.get()))
+      << "Error when starting switchd.";
+  LOG(INFO) << "switchd started successfully";
+
+  return ::util::OkStatus();
+}
 
 ::util::Status BfSdeWrapper::AddDevice(int device,
                                        const BfrtDeviceConfig& device_config) {
@@ -1398,6 +1726,8 @@ std::string BfSdeWrapper::GetSdeVersion() const {
       bf_sys_log_level_set(BF_MOD_PKT, BF_LOG_DEST_STDOUT, BF_LOG_WARN) == 0);
   CHECK_RETURN_IF_FALSE(
       bf_sys_log_level_set(BF_MOD_PIPE, BF_LOG_DEST_STDOUT, BF_LOG_WARN) == 0);
+  CHECK_RETURN_IF_FALSE(
+      bf_sys_log_level_set(BF_MOD_TM, BF_LOG_DEST_STDOUT, BF_LOG_WARN) == 0);
   stat_mgr_enable_detail_trace = false;
   if (VLOG_IS_ON(2)) {
     CHECK_RETURN_IF_FALSE(bf_sys_log_level_set(BF_MOD_PIPE, BF_LOG_DEST_STDOUT,
@@ -1517,8 +1847,7 @@ BfSdeWrapper::CreateTableData(int table_id, int action_id) {
   if (!(*rx_writer)->TryWrite(buffer).ok()) {
     LOG_EVERY_N(INFO, 500) << "Dropped packet received from CPU.";
   }
-
-  VLOG(1) << "Received packet from CPU " << buffer.size() << " bytes "
+  VLOG(1) << "Received " << buffer.size() << " byte packet from CPU "
           << StringToHex(buffer);
 
   return ::util::OkStatus();
@@ -1655,7 +1984,7 @@ namespace {
   const bfrt::BfRtTable* table;
   RETURN_IF_BFRT_ERROR(bfrt_info_->bfrtTableFromNameGet(kPreNodeTable, &table));
   size_t table_size;
-#if defined(SDE_9_4_0)
+#if defined(SDE_9_4_0) || defined(SDE_9_5_0)
   RETURN_IF_BFRT_ERROR(table->tableSizeGet(*real_session->bfrt_session_,
                                            bf_dev_tgt, &table_size));
 #else
@@ -1963,7 +2292,8 @@ namespace {
   CHECK_RETURN_IF_FALSE(real_session);
 
   const bfrt::BfRtTable* table;
-  RETURN_IF_BFRT_ERROR(bfrt_info_->bfrtTableFromNameGet("$mirror.cfg", &table));
+  RETURN_IF_BFRT_ERROR(
+      bfrt_info_->bfrtTableFromNameGet(kMirrorConfigTable, &table));
   std::unique_ptr<bfrt::BfRtTableKey> table_key;
   std::unique_ptr<bfrt::BfRtTableData> table_data;
   RETURN_IF_BFRT_ERROR(table->keyAllocate(&table_key));
@@ -2024,7 +2354,8 @@ namespace {
   CHECK_RETURN_IF_FALSE(real_session);
 
   const bfrt::BfRtTable* table;
-  RETURN_IF_BFRT_ERROR(bfrt_info_->bfrtTableFromNameGet("$mirror.cfg", &table));
+  RETURN_IF_BFRT_ERROR(
+      bfrt_info_->bfrtTableFromNameGet(kMirrorConfigTable, &table));
   std::unique_ptr<bfrt::BfRtTableKey> table_key;
   std::unique_ptr<bfrt::BfRtTableData> table_data;
   RETURN_IF_BFRT_ERROR(table->keyAllocate(&table_key));
@@ -2056,7 +2387,8 @@ namespace {
 
   auto bf_dev_tgt = GetDeviceTarget(device);
   const bfrt::BfRtTable* table;
-  RETURN_IF_BFRT_ERROR(bfrt_info_->bfrtTableFromNameGet("$mirror.cfg", &table));
+  RETURN_IF_BFRT_ERROR(
+      bfrt_info_->bfrtTableFromNameGet(kMirrorConfigTable, &table));
   bf_rt_id_t action_id;
   RETURN_IF_BFRT_ERROR(table->actionIdGet("$normal", &action_id));
   std::vector<std::unique_ptr<bfrt::BfRtTableKey>> keys;
@@ -2138,12 +2470,12 @@ namespace {
   RETURN_IF_BFRT_ERROR(table->dataAllocate(&table_data));
 
   // Counter key: $COUNTER_INDEX
-  RETURN_IF_ERROR(SetField(table_key.get(), "$COUNTER_INDEX", counter_index));
+  RETURN_IF_ERROR(SetField(table_key.get(), kCounterIndex, counter_index));
 
   // Counter data: $COUNTER_SPEC_BYTES
   if (byte_count.has_value()) {
     bf_rt_id_t field_id;
-    auto bf_status = table->dataFieldIdGet("$COUNTER_SPEC_BYTES", &field_id);
+    auto bf_status = table->dataFieldIdGet(kCounterBytes, &field_id);
     if (bf_status == BF_SUCCESS) {
       RETURN_IF_BFRT_ERROR(table_data->setValue(field_id, byte_count.value()));
     }
@@ -2151,7 +2483,7 @@ namespace {
   // Counter data: $COUNTER_SPEC_PKTS
   if (packet_count.has_value()) {
     bf_rt_id_t field_id;
-    auto bf_status = table->dataFieldIdGet("$COUNTER_SPEC_PKTS", &field_id);
+    auto bf_status = table->dataFieldIdGet(kCounterPackets, &field_id);
     if (bf_status == BF_SUCCESS) {
       RETURN_IF_BFRT_ERROR(
           table_data->setValue(field_id, packet_count.value()));
@@ -2195,7 +2527,7 @@ namespace {
 
     // Key: $COUNTER_INDEX
     RETURN_IF_ERROR(
-        SetField(keys[0].get(), "$COUNTER_INDEX", counter_index.value()));
+        SetField(keys[0].get(), kCounterIndex, counter_index.value()));
     RETURN_IF_BFRT_ERROR(table->tableEntryGet(
         *real_session->bfrt_session_, bf_dev_tgt, *keys[0],
         bfrt::BfRtTable::BfRtTableGetFlag::GET_FROM_SW, datums[0].get()));
@@ -2212,14 +2544,14 @@ namespace {
     const std::unique_ptr<bfrt::BfRtTableKey>& table_key = keys[i];
     // Key: $COUNTER_INDEX
     uint64 bf_counter_index;
-    RETURN_IF_ERROR(GetField(*table_key, "$COUNTER_INDEX", &bf_counter_index));
+    RETURN_IF_ERROR(GetField(*table_key, kCounterIndex, &bf_counter_index));
     counter_indices->push_back(bf_counter_index);
 
     absl::optional<uint64> byte_count;
     absl::optional<uint64> packet_count;
     // Counter data: $COUNTER_SPEC_BYTES
     bf_rt_id_t field_id;
-    auto bf_status = table->dataFieldIdGet("$COUNTER_SPEC_BYTES", &field_id);
+    auto bf_status = table->dataFieldIdGet(kCounterBytes, &field_id);
     if (bf_status == BF_SUCCESS) {
       uint64 counter_data;
       RETURN_IF_BFRT_ERROR(table_data->getValue(field_id, &counter_data));
@@ -2228,7 +2560,7 @@ namespace {
     byte_counts->push_back(byte_count);
 
     // Counter data: $COUNTER_SPEC_PKTS
-    bf_status = table->dataFieldIdGet("$COUNTER_SPEC_PKTS", &field_id);
+    bf_status = table->dataFieldIdGet(kCounterPackets, &field_id);
     if (bf_status == BF_SUCCESS) {
       uint64 counter_data;
       RETURN_IF_BFRT_ERROR(table_data->getValue(field_id, &counter_data));
@@ -2310,7 +2642,7 @@ namespace {
   } else {
     // Wildcard write to all indices.
     size_t table_size;
-#if defined(SDE_9_4_0)
+#if defined(SDE_9_4_0) || defined(SDE_9_5_0)
     RETURN_IF_BFRT_ERROR(table->tableSizeGet(*real_session->bfrt_session_,
                                              bf_dev_tgt, &table_size));
 #else
@@ -2355,7 +2687,7 @@ namespace {
 
     // Key: $REGISTER_INDEX
     RETURN_IF_ERROR(
-        SetField(keys[0].get(), "$REGISTER_INDEX", register_index.value()));
+        SetField(keys[0].get(), kRegisterIndex, register_index.value()));
     RETURN_IF_BFRT_ERROR(table->tableEntryGet(
         *real_session->bfrt_session_, bf_dev_tgt, *keys[0],
         bfrt::BfRtTable::BfRtTableGetFlag::GET_FROM_SW, datums[0].get()));
@@ -2371,8 +2703,7 @@ namespace {
     const std::unique_ptr<bfrt::BfRtTableKey>& table_key = keys[i];
     // Key: $REGISTER_INDEX
     uint64 bf_register_index;
-    RETURN_IF_ERROR(
-        GetField(*table_key, "$REGISTER_INDEX", &bf_register_index));
+    RETURN_IF_ERROR(GetField(*table_key, kRegisterIndex, &bf_register_index));
     register_indices->push_back(bf_register_index);
     // Data: <register_name>.f1
     ASSIGN_OR_RETURN(auto f1_field_id, GetRegisterDataFieldId(table));
@@ -2447,7 +2778,7 @@ namespace {
   } else {
     // Wildcard write to all indices.
     size_t table_size;
-#if defined(SDE_9_4_0)
+#if defined(SDE_9_4_0) || defined(SDE_9_5_0)
     RETURN_IF_BFRT_ERROR(table->tableSizeGet(*real_session->bfrt_session_,
                                              bf_dev_tgt, &table_size));
 #else
@@ -2588,18 +2919,30 @@ namespace {
 
   std::unique_ptr<bfrt::BfRtTableKey> table_key;
   RETURN_IF_BFRT_ERROR(table->keyAllocate(&table_key));
+
+  auto dump_args = [&]() -> std::string {
+    return absl::StrCat(
+        DumpTableMetadata(table).ValueOr("<error reading table>"),
+        ", member_id: ", member_id, ", ",
+        DumpTableKey(table_key.get()).ValueOr("<error parsing key>"), ", ",
+        DumpTableData(real_table_data->table_data_.get())
+            .ValueOr("<error parsing data>"));
+  };
+
   // Key: $ACTION_MEMBER_ID
-  RETURN_IF_ERROR(SetField(table_key.get(), "$ACTION_MEMBER_ID", member_id));
+  RETURN_IF_ERROR(SetField(table_key.get(), kActionMemberId, member_id));
 
   auto bf_dev_tgt = GetDeviceTarget(device);
   if (insert) {
     RETURN_IF_BFRT_ERROR(table->tableEntryAdd(*real_session->bfrt_session_,
                                               bf_dev_tgt, *table_key,
-                                              *real_table_data->table_data_));
+                                              *real_table_data->table_data_))
+        << "Could not add action profile member with: " << dump_args();
   } else {
     RETURN_IF_BFRT_ERROR(table->tableEntryMod(*real_session->bfrt_session_,
                                               bf_dev_tgt, *table_key,
-                                              *real_table_data->table_data_));
+                                              *real_table_data->table_data_))
+        << "Could not modify action profile member with: " << dump_args();
   }
 
   return ::util::OkStatus();
@@ -2634,12 +2977,20 @@ namespace {
   std::unique_ptr<bfrt::BfRtTableKey> table_key;
   RETURN_IF_BFRT_ERROR(table->keyAllocate(&table_key));
 
+  auto dump_args = [&]() -> std::string {
+    return absl::StrCat(
+        DumpTableMetadata(table).ValueOr("<error reading table>"),
+        ", member_id: ", member_id, ", ",
+        DumpTableKey(table_key.get()).ValueOr("<error parsing key>"));
+  };
+
   // Key: $ACTION_MEMBER_ID
-  RETURN_IF_ERROR(SetField(table_key.get(), "$ACTION_MEMBER_ID", member_id));
+  RETURN_IF_ERROR(SetField(table_key.get(), kActionMemberId, member_id));
 
   auto bf_dev_tgt = GetDeviceTarget(device);
   RETURN_IF_BFRT_ERROR(table->tableEntryDel(*real_session->bfrt_session_,
-                                            bf_dev_tgt, *table_key));
+                                            bf_dev_tgt, *table_key))
+      << "Could not delete action profile member with: " << dump_args();
 
   return ::util::OkStatus();
 }
@@ -2666,7 +3017,7 @@ namespace {
     RETURN_IF_BFRT_ERROR(table->keyAllocate(&keys[0]));
     RETURN_IF_BFRT_ERROR(table->dataAllocate(&datums[0]));
     // Key: $ACTION_MEMBER_ID
-    RETURN_IF_ERROR(SetField(keys[0].get(), "$ACTION_MEMBER_ID", member_id));
+    RETURN_IF_ERROR(SetField(keys[0].get(), kActionMemberId, member_id));
     RETURN_IF_BFRT_ERROR(table->tableEntryGet(
         *real_session->bfrt_session_, bf_dev_tgt, *keys[0],
         bfrt::BfRtTable::BfRtTableGetFlag::GET_FROM_SW, datums[0].get()));
@@ -2680,7 +3031,7 @@ namespace {
   for (size_t i = 0; i < keys.size(); ++i) {
     // Key: $sid
     uint64 member_id;
-    RETURN_IF_ERROR(GetField(*keys[i], "$ACTION_MEMBER_ID", &member_id));
+    RETURN_IF_ERROR(GetField(*keys[i], kActionMemberId, &member_id));
     member_ids->push_back(member_id);
 
     // Data: action params
@@ -2710,13 +3061,23 @@ namespace {
   RETURN_IF_BFRT_ERROR(table->keyAllocate(&table_key));
   RETURN_IF_BFRT_ERROR(table->dataAllocate(&table_data));
 
+  // We have to capture the std::unique_ptrs by reference [&] here.
+  auto dump_args = [&]() -> std::string {
+    return absl::StrCat(
+        DumpTableMetadata(table).ValueOr("<error reading table>"),
+        ", group_id: ", group_id, ", max_group_size: ", max_group_size,
+        ", members: ", PrintVector(member_ids, ","), ", ",
+        DumpTableKey(table_key.get()).ValueOr("<error parsing key>"), ", ",
+        DumpTableData(table_data.get()).ValueOr("<error parsing data>"));
+  };
+
   // Key: $SELECTOR_GROUP_ID
-  RETURN_IF_ERROR(SetField(table_key.get(), "$SELECTOR_GROUP_ID", group_id));
+  RETURN_IF_ERROR(SetField(table_key.get(), kSelectorGroupId, group_id));
   // Data: $ACTION_MEMBER_ID
-  RETURN_IF_ERROR(SetField(table_data.get(), "$ACTION_MEMBER_ID", member_ids));
+  RETURN_IF_ERROR(SetField(table_data.get(), kActionMemberId, member_ids));
   // Data: $ACTION_MEMBER_STATUS
   RETURN_IF_ERROR(
-      SetField(table_data.get(), "$ACTION_MEMBER_STATUS", member_status));
+      SetField(table_data.get(), kActionMemberStatus, member_status));
   // Data: $MAX_GROUP_SIZE
   RETURN_IF_ERROR(
       SetField(table_data.get(), "$MAX_GROUP_SIZE", max_group_size));
@@ -2724,10 +3085,12 @@ namespace {
   auto bf_dev_tgt = GetDeviceTarget(device);
   if (insert) {
     RETURN_IF_BFRT_ERROR(table->tableEntryAdd(
-        *real_session->bfrt_session_, bf_dev_tgt, *table_key, *table_data));
+        *real_session->bfrt_session_, bf_dev_tgt, *table_key, *table_data))
+        << "Could not add action profile group with: " << dump_args();
   } else {
     RETURN_IF_BFRT_ERROR(table->tableEntryMod(
-        *real_session->bfrt_session_, bf_dev_tgt, *table_key, *table_data));
+        *real_session->bfrt_session_, bf_dev_tgt, *table_key, *table_data))
+        << "Could not modify action profile group with: " << dump_args();
   }
 
   return ::util::OkStatus();
@@ -2766,11 +3129,21 @@ namespace {
   RETURN_IF_BFRT_ERROR(bfrt_info_->bfrtTableFromIdGet(table_id, &table));
   std::unique_ptr<bfrt::BfRtTableKey> table_key;
   RETURN_IF_BFRT_ERROR(table->keyAllocate(&table_key));
+
+  auto dump_args = [&]() -> std::string {
+    return absl::StrCat(
+        DumpTableMetadata(table).ValueOr("<error reading table>"),
+        ", group_id: ", group_id,
+        DumpTableKey(table_key.get()).ValueOr("<error parsing key>"));
+  };
+
   // Key: $SELECTOR_GROUP_ID
-  RETURN_IF_ERROR(SetField(table_key.get(), "$SELECTOR_GROUP_ID", group_id));
+  RETURN_IF_ERROR(SetField(table_key.get(), kSelectorGroupId, group_id));
+
   auto bf_dev_tgt = GetDeviceTarget(device);
   RETURN_IF_BFRT_ERROR(table->tableEntryDel(*real_session->bfrt_session_,
-                                            bf_dev_tgt, *table_key));
+                                            bf_dev_tgt, *table_key))
+      << "Could not delete action profile group with: " << dump_args();
 
   return ::util::OkStatus();
 }
@@ -2801,7 +3174,7 @@ namespace {
     RETURN_IF_BFRT_ERROR(table->keyAllocate(&keys[0]));
     RETURN_IF_BFRT_ERROR(table->dataAllocate(&datums[0]));
     // Key: $SELECTOR_GROUP_ID
-    RETURN_IF_ERROR(SetField(keys[0].get(), "$SELECTOR_GROUP_ID", group_id));
+    RETURN_IF_ERROR(SetField(keys[0].get(), kSelectorGroupId, group_id));
     RETURN_IF_BFRT_ERROR(table->tableEntryGet(
         *real_session->bfrt_session_, bf_dev_tgt, *keys[0],
         bfrt::BfRtTable::BfRtTableGetFlag::GET_FROM_SW, datums[0].get()));
@@ -2819,7 +3192,7 @@ namespace {
     const std::unique_ptr<bfrt::BfRtTableKey>& table_key = keys[i];
     // Key: $SELECTOR_GROUP_ID
     uint64 group_id;
-    RETURN_IF_ERROR(GetField(*table_key, "$SELECTOR_GROUP_ID", &group_id));
+    RETURN_IF_ERROR(GetField(*table_key, kSelectorGroupId, &group_id));
     group_ids->push_back(group_id);
 
     // Data: $MAX_GROUP_SIZE
@@ -2829,13 +3202,13 @@ namespace {
 
     // Data: $ACTION_MEMBER_ID
     std::vector<uint32> members;
-    RETURN_IF_ERROR(GetField(*table_data, "$ACTION_MEMBER_ID", &members));
+    RETURN_IF_ERROR(GetField(*table_data, kActionMemberId, &members));
     member_ids->push_back(members);
 
     // Data: $ACTION_MEMBER_STATUS
     std::vector<bool> member_enabled;
     RETURN_IF_ERROR(
-        GetField(*table_data, "$ACTION_MEMBER_STATUS", &member_enabled));
+        GetField(*table_data, kActionMemberStatus, &member_enabled));
     member_status->push_back(member_enabled);
   }
 
@@ -2861,10 +3234,22 @@ namespace {
 
   const bfrt::BfRtTable* table;
   RETURN_IF_BFRT_ERROR(bfrt_info_->bfrtTableFromIdGet(table_id, &table));
+
+  auto dump_args = [&]() -> std::string {
+    return absl::StrCat(
+        DumpTableMetadata(table).ValueOr("<error reading table>"), ", ",
+        DumpTableKey(real_table_key->table_key_.get())
+            .ValueOr("<error parsing key>"),
+        ", ",
+        DumpTableData(real_table_data->table_data_.get())
+            .ValueOr("<error parsing data>"));
+  };
+
   auto bf_dev_tgt = GetDeviceTarget(device);
   RETURN_IF_BFRT_ERROR(table->tableEntryAdd(
       *real_session->bfrt_session_, bf_dev_tgt, *real_table_key->table_key_,
-      *real_table_data->table_data_));
+      *real_table_data->table_data_))
+      << "Could not add table entry with: " << dump_args();
 
   return ::util::OkStatus();
 }
@@ -2883,10 +3268,21 @@ namespace {
   const bfrt::BfRtTable* table;
   RETURN_IF_BFRT_ERROR(bfrt_info_->bfrtTableFromIdGet(table_id, &table));
 
+  auto dump_args = [&]() -> std::string {
+    return absl::StrCat(
+        DumpTableMetadata(table).ValueOr("<error reading table>"), ", ",
+        DumpTableKey(real_table_key->table_key_.get())
+            .ValueOr("<error parsing key>"),
+        ", ",
+        DumpTableData(real_table_data->table_data_.get())
+            .ValueOr("<error parsing data>"));
+  };
+
   auto bf_dev_tgt = GetDeviceTarget(device);
   RETURN_IF_BFRT_ERROR(table->tableEntryMod(
       *real_session->bfrt_session_, bf_dev_tgt, *real_table_key->table_key_,
-      *real_table_data->table_data_));
+      *real_table_data->table_data_))
+      << "Could not modify table entry with: " << dump_args();
 
   return ::util::OkStatus();
 }
@@ -2902,9 +3298,17 @@ namespace {
   const bfrt::BfRtTable* table;
   RETURN_IF_BFRT_ERROR(bfrt_info_->bfrtTableFromIdGet(table_id, &table));
 
+  auto dump_args = [&]() -> std::string {
+    return absl::StrCat(
+        DumpTableMetadata(table).ValueOr("<error reading table>"), ", ",
+        DumpTableKey(real_table_key->table_key_.get())
+            .ValueOr("<error parsing key>"));
+  };
+
   auto bf_dev_tgt = GetDeviceTarget(device);
   RETURN_IF_BFRT_ERROR(table->tableEntryDel(
-      *real_session->bfrt_session_, bf_dev_tgt, *real_table_key->table_key_));
+      *real_session->bfrt_session_, bf_dev_tgt, *real_table_key->table_key_))
+      << "Could not delete table entry with: " << dump_args();
 
   return ::util::OkStatus();
 }

@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "absl/strings/match.h"
+#include "bf_rt/bf_rt_table.hpp"
 #include "nlohmann/json.hpp"
 #include "stratum/glue/gtl/map_util.h"
 #include "stratum/hal/lib/barefoot/bfrt_constants.h"
@@ -15,7 +16,11 @@ namespace stratum {
 namespace hal {
 namespace barefoot {
 
-BfrtIdMapper::BfrtIdMapper() {}
+BfrtIdMapper::BfrtIdMapper()
+    : bfrt_to_p4info_id_(),
+      p4info_to_bfrt_id_(),
+      act_profile_to_selector_mapping_(),
+      act_selector_to_profile_mapping_() {}
 
 std::unique_ptr<BfrtIdMapper> BfrtIdMapper::CreateInstance() {
   return absl::WrapUnique(new BfrtIdMapper());

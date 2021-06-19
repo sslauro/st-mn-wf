@@ -54,8 +54,8 @@ class StratumTofinoModel(Switch):
     mininet_exception = multiprocessing.Value('i', 0)
     nextNodeId = 0
 
-    def __init__(self, name, inNamespace = True, 
-                 sdeInstall="/root/sde/install", 
+    def __init__(self, name, inNamespace = True,
+                 sdeInstall="/root/sde/install",
                  bfSwitchdConfig="/etc/stratum/tofino_skip_p4.conf", **kwargs):
         Switch.__init__(self, name, inNamespace = True, **kwargs)
         self.sdeInstall = sdeInstall
@@ -113,11 +113,9 @@ class StratumTofinoModel(Switch):
             [
                 STRATUM_BIN,
                 f'-chassis_config_file={self.chassisConfigFile}',
-                '-bf_sim',
                 '-enable_onlp=false',
                 '-bf_switchd_background=false',
-                '-v=6',
-                '-alsologtostderr=true',
+                '-v=2',
                 f'-bf_sde_install={self.sdeInstall}',
                 f'-bf_switchd_cfg={self.bfSwitchdConfig}',
             ]

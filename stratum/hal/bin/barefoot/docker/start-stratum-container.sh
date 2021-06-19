@@ -4,7 +4,7 @@
 set -e
 
 LOG_DIR=${LOG_DIR:-/var/log}
-SDE_VERSION=${SDE_VERSION:-9.2.0}
+SDE_VERSION=${SDE_VERSION:-9.3.2}
 DOCKER_IMAGE=${DOCKER_IMAGE:-stratumproject/stratum-bf}
 DOCKER_IMAGE_TAG=${DOCKER_IMAGE_TAG:-$SDE_VERSION}
 
@@ -20,8 +20,7 @@ fi
 if [[ "$PLATFORM" == 'barefoot-tofino-model' ]]; then
     DOCKER_NET_OPTS="--network host "
 else
-    DOCKER_NET_OPTS="-p 28000:28000 "
-    DOCKER_NET_OPTS+="-p 9339:9339 "
+    DOCKER_NET_OPTS="-p 9339:9339 "
     DOCKER_NET_OPTS+="-p 9559:9559 "
 fi
 

@@ -15,7 +15,6 @@ stratum_bf_common_deps = [
     "//stratum/glue:init_google",
     "//stratum/glue:logging",
     "//stratum/hal/lib/common:hal",
-    "//stratum/hal/lib/phal:phal_sim",
     "//stratum/hal/lib/phal",
     "//stratum/lib/security:auth_policy_checker",
     "//stratum/lib/security:credentials_manager",
@@ -54,7 +53,6 @@ stratum_cc_binary(
         "//stratum/hal/lib/barefoot:bf_sde_wrapper",
         "//stratum/hal/lib/barefoot:bf_switch",
         "//stratum/hal/lib/pi:pi_node_bf",
-        "@local_barefoot_bin//:bfsde",
     ] + stratum_bf_common_deps,
 )
 
@@ -77,7 +75,6 @@ stratum_cc_binary(
         "//stratum/hal/lib/barefoot:bfrt_pre_manager",
         "//stratum/hal/lib/barefoot:bfrt_table_manager",
         "//stratum/hal/lib/barefoot:bfrt_counter_manager",
-        "@local_barefoot_bin//:bfsde",
     ] + stratum_bf_common_deps,
 )
 
@@ -85,6 +82,7 @@ stratum_cc_binary(
 pkg_tar(
     name = "stratum_binaries",
     srcs = [
+        "deb/attach-bf-shell.sh",
         "deb/start-stratum.sh",
         ":bf_pipeline_builder",
         ":stratum_bf",
@@ -95,8 +93,9 @@ pkg_tar(
 
 pkg_tar(
     name = "stratum_bfrt_binaries",
+    # TODO(bocon): Consider refactoring common start script and builder
     srcs = [
-        # TODO(bocon): Consider refactoring common start script and builder
+        "deb/attach-bf-shell.sh",
         "deb/start-stratum.sh",
         ":bf_pipeline_builder",
         ":stratum_bfrt",
@@ -177,6 +176,8 @@ pkg_deb(
     depends = [
         "kmod",
         "libedit2",
+        "systemd",
+        "telnet",
     ],
     description = "The Stratum package for Barefoot Tofino-based platform",
     homepage = "https://stratumproject.org/",
@@ -194,13 +195,11 @@ pkg_deb(
     conflicts = ["stratum-bf"],
     data = ":stratum_bfrt_data",
     depends = [
-        "systemd",
         "kmod",
-        "libssl1.1",
         "libedit2",
-        "libjudydebian1",
-        "libboost-thread1.62.0",
-        "libbz2-1.0",
+        "libssl1.1",
+        "systemd",
+        "telnet",
     ],
     description = "The Stratum package for Barefoot Tofino-based platform",
     homepage = "https://stratumproject.org/",

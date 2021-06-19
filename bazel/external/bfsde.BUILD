@@ -18,8 +18,7 @@ cc_library(
         "barefoot-bin/lib/libbfutils.so*",
         "barefoot-bin/lib/libdriver.so*",
         "barefoot-bin/lib/libpython3.4m.so*",
-        "barefoot-bin/lib/libbf_switchd_lib.a",
-    ]),
+    ]) + ["barefoot-bin/lib/libbf_switchd_lib.a"],
     hdrs = glob([
         "barefoot-bin/include/bf_rt/*.h",
         "barefoot-bin/include/bf_rt/*.hpp",
@@ -35,6 +34,7 @@ cc_library(
         "barefoot-bin/include/port_mgr/*.h",
         "barefoot-bin/include/tofino/bf_pal/*.h",
         "barefoot-bin/include/tofino/pdfixed/*.h",
+        "barefoot-bin/include/traffic_mgr/*.h",
     ]),
     linkopts = [
         "-lpthread",
@@ -53,6 +53,7 @@ cc_library(
 pkg_tar_with_symlinks(
     name = "bf_library_files",
     srcs = glob([
+        "barefoot-bin/lib/bfshell_plugin_*.so*",
         "barefoot-bin/lib/libavago.so*",
         "barefoot-bin/lib/libbfsys.so*",
         "barefoot-bin/lib/libbfutils.so*",
@@ -68,10 +69,11 @@ pkg_tar_with_symlinks(
 pkg_tar_with_symlinks(
     name = "bf_shareable_files",
     srcs = glob([
-        "barefoot-bin/share/microp_fw/**",
-        "barefoot-bin/share/bfsys/**",
-        "barefoot-bin/share/tofino_sds_fw/**",
         "barefoot-bin/share/bf_rt_shared/**",
+        "barefoot-bin/share/bfsys/**",
+        "barefoot-bin/share/cli/xml/**",
+        "barefoot-bin/share/microp_fw/**",
+        "barefoot-bin/share/tofino_sds_fw/**",
     ]),
     mode = "0644",
     package_dir = "/usr",
@@ -116,8 +118,22 @@ config_setting(
 )
 
 config_setting(
+    name = "sde_version_9.3.2",
+    flag_values = {
+        ":sde_version_setting": "9.3.2",
+    },
+)
+
+config_setting(
     name = "sde_version_9.4.0",
     flag_values = {
         ":sde_version_setting": "9.4.0",
+    },
+)
+
+config_setting(
+    name = "sde_version_9.5.0",
+    flag_values = {
+        ":sde_version_setting": "9.5.0",
     },
 )
